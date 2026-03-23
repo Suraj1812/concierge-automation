@@ -95,15 +95,16 @@ export class ConversationService {
       latestCustomerMessage: payload.text
     });
 
-    const enquiry = await this.enquiryService.createOrUpdateFromAi(customerId, latestEnquiry, {
+    const enquiryUpdate = await this.enquiryService.createOrUpdateFromAi(customerId, latestEnquiry, {
       title: aiTurn.title,
       summary: aiTurn.summary,
       serviceType: aiTurn.serviceType,
       extractedRequirements: aiTurn.extractedRequirements,
       missingFields: aiTurn.missingFields
     });
+    const enquiry = enquiryUpdate.enquiry;
 
-    if (!conversation.enquiryId) {
+    if (!conversation.enquiryId || conversation.enquiryId.toString() !== getEntityId(enquiry)) {
       await this.conversationRepository.attachEnquiry(getEntityId(conversation), getEntityId(enquiry));
     }
 
@@ -163,7 +164,9 @@ export class ConversationService {
       entityId: getEntityId(conversation),
       metadata: {
         enquiryId: getEntityId(enquiry),
-        nextAction: aiTurn.nextAction
+        nextAction: aiTurn.nextAction,
+        materialChangeDetected: enquiryUpdate.materialChangeDetected,
+        createdNewEnquiry: enquiryUpdate.createdNewEnquiry
       }
     });
   }

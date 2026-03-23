@@ -9,8 +9,9 @@ Production-grade, SaaS-ready AI concierge backend for luxury concierge operation
 - MongoDB persistence for customers, enquiries, conversations, vendors, quotes, proposals, payments, bookings, notifications, and audit logs
 - BullMQ + Redis background processing for conversation handling, vendor outreach, retries, reminders, proposal generation, and booking lifecycle jobs
 - Razorpay payment order creation and verified webhook processing
-- PDF proposal generation and hosted delivery
+- PDF proposal generation and signed proposal delivery
 - JWT-protected admin APIs, idempotent write endpoints, validation, centralized error handling, logging, and auditability
+- Liveness/readiness/metrics endpoints, dead-letter queue capture, and correlation-aware structured logs
 
 ## Quick Start
 
@@ -25,6 +26,7 @@ Production-grade, SaaS-ready AI concierge backend for luxury concierge operation
 - Type check: `npm run lint`
 - Production build: `npm run build`
 - End-to-end smoke flow: `npm run test:smoke`
+- Hardening flow: `npm run test:hardening`
 
 ## Docs
 

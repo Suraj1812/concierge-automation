@@ -57,6 +57,26 @@ export class PaymentService {
       throw new AppError("Payment data incomplete", 422, "PAYMENT_DATA_INCOMPLETE");
     }
 
+    const existingPayment = await this.paymentRepository.findLatestByProposal(proposalId);
+    if (existingPayment?.status === "captured") {
+      throw new AppError("Payment has already been captured for this proposal", 409, "PAYMENT_ALREADY_CAPTURED");
+    }
+
+    const activeExistingPayment = existingPayment
+      && existingPayment.status === "pending"
+      && existingPayment.razorpayOrderId
+      && (!existingPayment.expiresAt || existingPayment.expiresAt > new Date());
+
+    if (activeExistingPayment) {
+      return {
+        paymentId: getEntityId(existingPayment),
+        orderId: existingPayment.razorpayOrderId,
+        amount: existingPayment.amount,
+        currency: existingPayment.currency,
+        keyId: env.RAZORPAY_KEY_ID
+      };
+    }
+
     const receipt = `enquiry_${enquiryId}_${Date.now()}`;
     const order = await this.razorpayService.createOrder({
       amount: Math.round(quote.normalizedOffer.totalAmount * 100),
@@ -137,166 +157,188 @@ export class PaymentService {
       return;
     }
 
-    if (await this.webhookReceiptRepository.hasProcessed("razorpay", eventId)) {
+    const receiptState = await this.webhookReceiptRepository.tryStartProcessing("razorpay", eventId, signature);
+    if (receiptState !== "acquired") {
       return;
     }
 
-    const payment = await this.paymentRepository.findByOrderId(orderId);
-    if (!payment) {
-      await this.webhookReceiptRepository.markProcessed("razorpay", eventId, signature);
-      return;
-    }
-
-    await this.paymentRepository.appendWebhookEvent(getEntityId(payment), payload.event, eventId, payload as Record<string, unknown>);
-
-    if (payload.event === "payment.captured") {
-      await this.paymentRepository.update(getEntityId(payment), {
-        status: "captured",
-        razorpayPaymentId: payload.payload?.payment?.entity?.id,
-        razorpaySignature: signature
-      });
-      await this.paymentRepository.markOrderStatus(getEntityId(payment), orderId, "captured");
-      await this.enquiryRepository.update(payment.enquiryId.toString(), {
-        paymentStatus: "captured",
-        status: "payment_authorized"
-      });
-
-      await bookingLifecycleQueue.add(
-        "payment-captured",
-        {
-          paymentId: getEntityId(payment)
-        },
-        {
-          jobId: `payment-captured:${getEntityId(payment)}`
-        }
-      );
-    }
-
-    if (payload.event === "payment.failed") {
-      await this.paymentRepository.update(getEntityId(payment), {
-        status: "failed",
-        razorpayPaymentId: payload.payload?.payment?.entity?.id,
-        razorpaySignature: signature
-      });
-      await this.paymentRepository.markOrderStatus(getEntityId(payment), orderId, "failed");
-      await paymentQueue.add(
-        "payment-reminder",
-        {
-          paymentId: getEntityId(payment)
-        },
-        {
-          delay: 15 * 60_000,
-          jobId: `payment-failed-retry:${getEntityId(payment)}:${Date.now()}`
-        }
-      );
-    }
-
-    await this.webhookReceiptRepository.markProcessed("razorpay", eventId, signature);
-  }
-
-  async processReminder(paymentId: string): Promise<void> {
-    const payment = await this.paymentRepository.findById(paymentId);
-    if (!payment || payment.status === "captured") {
-      return;
-    }
-
-    const enquiry = await this.enquiryRepository.findById(payment.enquiryId.toString());
-    if (!enquiry) {
-      return;
-    }
-
-    const customer = await this.customerRepository.findById(enquiry.customerId.toString());
-    if (!customer) {
-      return;
-    }
-
-    const isExpired = payment.expiresAt ? payment.expiresAt <= new Date() : false;
-
-    if ((payment.status === "failed" || isExpired) && payment.retryCount < env.MAX_PAYMENT_RETRY_ATTEMPTS) {
-      const proposal = payment.proposalId ? await this.proposalRepository.findById(payment.proposalId.toString()) : null;
-      const quote = proposal ? await this.quoteRepository.findById(proposal.recommendedQuoteId.toString()) : null;
-
-      if (!proposal || !quote?.normalizedOffer) {
+    try {
+      const payment = await this.paymentRepository.findByOrderId(orderId);
+      if (!payment) {
+        await this.webhookReceiptRepository.markCompleted("razorpay", eventId, signature);
         return;
       }
 
-      const newReceipt = `${payment.receipt}-r${payment.retryCount + 1}`;
-      const newOrder = await this.razorpayService.createOrder({
-        amount: Math.round(quote.normalizedOffer.totalAmount * 100),
-        currency: quote.normalizedOffer.currency,
-        receipt: newReceipt,
-        notes: {
-          enquiryId: payment.enquiryId.toString(),
-          proposalId: getEntityId(proposal),
-          paymentId
-        }
-      });
+      await this.paymentRepository.appendWebhookEvent(getEntityId(payment), payload.event, eventId, payload as Record<string, unknown>);
 
-      if (payment.razorpayOrderId) {
-        await this.paymentRepository.markOrderStatus(paymentId, payment.razorpayOrderId, "replaced");
+      if (payload.event === "payment.captured") {
+        if (payment.status !== "captured") {
+          await this.paymentRepository.update(getEntityId(payment), {
+            status: "captured",
+            razorpayPaymentId: payload.payload?.payment?.entity?.id,
+            razorpaySignature: signature
+          });
+          await this.enquiryRepository.update(payment.enquiryId.toString(), {
+            paymentStatus: "captured",
+            status: "payment_authorized"
+          });
+
+          await bookingLifecycleQueue.add(
+            "payment-captured",
+            {
+              paymentId: getEntityId(payment)
+            },
+            {
+              jobId: `payment-captured:${getEntityId(payment)}`
+            }
+          );
+        }
+
+        await this.paymentRepository.markOrderStatus(getEntityId(payment), orderId, "captured");
+        await this.paymentRepository.releaseAutomationLock(getEntityId(payment));
       }
 
-      await this.paymentRepository.incrementRetryWithNewOrder(paymentId, {
-        orderId: newOrder.id,
-        receipt: newReceipt,
-        expiresAt: addMinutes(new Date(), env.PAYMENT_LINK_EXPIRY_MINUTES)
-      });
+      if (payload.event === "payment.failed") {
+        await this.paymentRepository.update(getEntityId(payment), {
+          status: "failed",
+          razorpayPaymentId: payload.payload?.payment?.entity?.id,
+          razorpaySignature: signature
+        });
+        await this.paymentRepository.markOrderStatus(getEntityId(payment), orderId, "failed");
+        await this.paymentRepository.releaseAutomationLock(getEntityId(payment));
+        await paymentQueue.add(
+          "payment-reminder",
+          {
+            paymentId: getEntityId(payment)
+          },
+          {
+            delay: 15 * 60_000,
+            jobId: `payment-failed-retry:${getEntityId(payment)}:${Date.now()}`
+          }
+        );
+      }
 
-      await this.notificationService.enqueue({
-        type: "payment-retry-link",
-        channel: "whatsapp",
-        recipient: customer.phone,
-        body: {
-          text: `I’ve refreshed your secure payment link for convenience. Your new order reference is ${newOrder.id}. Once completed, I’ll confirm everything immediately.`
-        },
-        idempotencyKey: `payment-retry-link:${paymentId}:${newOrder.id}`
-      });
+      await this.webhookReceiptRepository.markCompleted("razorpay", eventId, signature);
+    } catch (error) {
+      await this.webhookReceiptRepository.markFailed("razorpay", eventId, (error as Error).message, signature);
+      throw error;
+    }
+  }
 
-      await paymentQueue.add(
-        "payment-reminder",
-        { paymentId },
-        {
-          delay: Math.floor(env.PAYMENT_LINK_EXPIRY_MINUTES / 2) * 60_000,
-          jobId: `payment-reminder:${paymentId}:${newOrder.id}`
-        }
-      );
-
+  async processReminder(paymentId: string): Promise<void> {
+    const payment = await this.paymentRepository.claimForAutomation(paymentId);
+    if (!payment) {
       return;
     }
 
-    if ((payment.status === "failed" || isExpired) && payment.retryCount >= env.MAX_PAYMENT_RETRY_ATTEMPTS) {
+    try {
+      const enquiry = await this.enquiryRepository.findById(payment.enquiryId.toString());
+      if (!enquiry) {
+        await this.paymentRepository.releaseAutomationLock(paymentId);
+        return;
+      }
+
+      const customer = await this.customerRepository.findById(enquiry.customerId.toString());
+      if (!customer) {
+        await this.paymentRepository.releaseAutomationLock(paymentId);
+        return;
+      }
+
+      const isExpired = payment.expiresAt ? payment.expiresAt <= new Date() : false;
+
+      if ((payment.status === "failed" || isExpired) && payment.retryCount < env.MAX_PAYMENT_RETRY_ATTEMPTS) {
+        const proposal = payment.proposalId ? await this.proposalRepository.findById(payment.proposalId.toString()) : null;
+        const quote = proposal ? await this.quoteRepository.findById(proposal.recommendedQuoteId.toString()) : null;
+
+        if (!proposal || !quote?.normalizedOffer) {
+          await this.paymentRepository.releaseAutomationLock(paymentId);
+          return;
+        }
+
+        const newReceipt = `${payment.receipt}-r${payment.retryCount + 1}`;
+        const newOrder = await this.razorpayService.createOrder({
+          amount: Math.round(quote.normalizedOffer.totalAmount * 100),
+          currency: quote.normalizedOffer.currency,
+          receipt: newReceipt,
+          notes: {
+            enquiryId: payment.enquiryId.toString(),
+            proposalId: getEntityId(proposal),
+            paymentId
+          }
+        });
+
+        if (payment.razorpayOrderId) {
+          await this.paymentRepository.markOrderStatus(paymentId, payment.razorpayOrderId, "replaced");
+        }
+
+        await this.paymentRepository.incrementRetryWithNewOrder(paymentId, {
+          orderId: newOrder.id,
+          receipt: newReceipt,
+          expiresAt: addMinutes(new Date(), env.PAYMENT_LINK_EXPIRY_MINUTES)
+        });
+
+        await this.notificationService.enqueue({
+          type: "payment-retry-link",
+          channel: "whatsapp",
+          recipient: customer.phone,
+          body: {
+            text: `I’ve refreshed your secure payment link for convenience. Your new order reference is ${newOrder.id}. Once completed, I’ll confirm everything immediately.`
+          },
+          idempotencyKey: `payment-retry-link:${paymentId}:${newOrder.id}`
+        });
+
+        await paymentQueue.add(
+          "payment-reminder",
+          { paymentId },
+          {
+            delay: Math.floor(env.PAYMENT_LINK_EXPIRY_MINUTES / 2) * 60_000,
+            jobId: `payment-reminder:${paymentId}:${newOrder.id}`
+          }
+        );
+
+        return;
+      }
+
+      if ((payment.status === "failed" || isExpired) && payment.retryCount >= env.MAX_PAYMENT_RETRY_ATTEMPTS) {
+        await this.notificationService.enqueue({
+          type: "payment-manual-assistance",
+          channel: "whatsapp",
+          recipient: customer.phone,
+          body: {
+            text: "Your payment link has expired a few times, so I recommend a quick manual check-in. Our team can assist immediately to complete the booking smoothly."
+          },
+          idempotencyKey: `payment-manual-assistance:${paymentId}`
+        });
+        await this.paymentRepository.releaseAutomationLock(paymentId);
+        return;
+      }
+
       await this.notificationService.enqueue({
-        type: "payment-manual-assistance",
+        type: "payment-reminder",
         channel: "whatsapp",
         recipient: customer.phone,
         body: {
-          text: "Your payment link has expired a few times, so I recommend a quick manual check-in. Our team can assist immediately to complete the booking smoothly."
+          text: "A quick reminder that your secure payment link is still active. Once completed, I’ll confirm the booking and coordinate the next steps immediately."
         },
-        idempotencyKey: `payment-manual-assistance:${paymentId}`
+        idempotencyKey: `payment-reminder:${paymentId}:${Date.now()}`
       });
-      return;
-    }
 
-    await this.notificationService.enqueue({
-      type: "payment-reminder",
-      channel: "whatsapp",
-      recipient: customer.phone,
-      body: {
-        text: "A quick reminder that your secure payment link is still active. Once completed, I’ll confirm the booking and coordinate the next steps immediately."
-      },
-      idempotencyKey: `payment-reminder:${paymentId}:${Date.now()}`
-    });
+      if (payment.expiresAt) {
+        const nextDelay = Math.max(15 * 60_000, Math.floor((payment.expiresAt.getTime() - Date.now()) / 2));
+        await paymentQueue.add(
+          "payment-reminder",
+          { paymentId },
+          {
+            delay: nextDelay,
+            jobId: `payment-reminder:${paymentId}:${Date.now()}`
+          }
+        );
+      }
 
-    if (payment.expiresAt) {
-      const nextDelay = Math.max(15 * 60_000, Math.floor((payment.expiresAt.getTime() - Date.now()) / 2));
-      await paymentQueue.add(
-        "payment-reminder",
-        { paymentId },
-        {
-          delay: nextDelay,
-          jobId: `payment-reminder:${paymentId}:${Date.now()}`
-        }
-      );
+      await this.paymentRepository.releaseAutomationLock(paymentId);
+    } catch (error) {
+      await this.paymentRepository.releaseAutomationLock(paymentId, (error as Error).message);
+      throw error;
     }
   }
 }

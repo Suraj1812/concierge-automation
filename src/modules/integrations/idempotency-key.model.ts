@@ -5,8 +5,12 @@ export interface IdempotencyKeyRecord {
   route: string;
   method: string;
   requestHash: string;
-  responseStatus: number;
-  responseBody: Record<string, unknown>;
+  status: "in_progress" | "completed" | "failed";
+  responseStatus?: number;
+  responseBody?: Record<string, unknown>;
+  processingStartedAt?: Date;
+  lockExpiresAt?: Date;
+  lastError?: string;
   expiresAt: Date;
 }
 
@@ -16,8 +20,12 @@ const idempotencyKeySchema = new Schema<IdempotencyKeyRecord>(
     route: { type: String, required: true },
     method: { type: String, required: true },
     requestHash: { type: String, required: true },
-    responseStatus: { type: Number, required: true },
-    responseBody: { type: Schema.Types.Mixed, required: true },
+    status: { type: String, enum: ["in_progress", "completed", "failed"], required: true, default: "in_progress", index: true },
+    responseStatus: { type: Number },
+    responseBody: { type: Schema.Types.Mixed },
+    processingStartedAt: { type: Date },
+    lockExpiresAt: { type: Date, index: true },
+    lastError: { type: String },
     expiresAt: { type: Date, required: true, index: { expires: 0 } }
   },
   {

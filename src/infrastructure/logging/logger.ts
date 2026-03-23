@@ -17,7 +17,9 @@ export const logger = createLogger({
   },
   transports: [
     new transports.Console({
-      format: format.combine(format.colorize(), format.simple())
+      format: env.NODE_ENV === "development"
+        ? format.combine(format.colorize(), format.simple())
+        : format.combine(format.timestamp(), format.errors({ stack: true }), format.json())
     }),
     new transports.File({
       filename: path.join(logsDirectory, "combined.log")

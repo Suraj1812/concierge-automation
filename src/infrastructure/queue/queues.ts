@@ -10,7 +10,8 @@ export const queueNames = {
   proposalGeneration: "proposal-generation",
   notifications: "notifications",
   bookingLifecycle: "booking-lifecycle",
-  payments: "payments"
+  payments: "payments",
+  deadLetter: "dead-letter"
 } as const;
 
 const defaultJobOptions = {
@@ -51,3 +52,4 @@ export const proposalGenerationQueue = createQueue(queueNames.proposalGeneration
 export const notificationQueue = createQueue(queueNames.notifications);
 export const bookingLifecycleQueue = createQueue(queueNames.bookingLifecycle);
 export const paymentQueue = createQueue(queueNames.payments);
+export const deadLetterQueue = createQueue(queueNames.deadLetter);

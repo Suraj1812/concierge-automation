@@ -1,4 +1,5 @@
 import path from "path";
+import crypto from "crypto";
 import { Types } from "mongoose";
 import { env } from "../../config/env";
 import { AppError } from "../../common/errors/AppError";
@@ -12,6 +13,7 @@ import { OpenAIService } from "../integrations/openai.service";
 import { NotificationService } from "../notifications/service";
 import { DecisionEngineService } from "../quotes/decision-engine.service";
 import { getEntityId } from "../../common/utils/entity";
+import { sha256 } from "../../common/utils/crypto";
 import { customerFollowUpQueue } from "../../infrastructure/queue/queues";
 
 export class ProposalService {
@@ -35,10 +37,37 @@ export class ProposalService {
     return this.proposalRepository.findLatestByEnquiry(enquiryId);
   }
 
+  private buildQuoteSignature(rankedQuoteIds: string[]): string {
+    return sha256(rankedQuoteIds.join("|"));
+  }
+
+  private buildDocumentUrl(proposalId: string, accessToken: string): string {
+    return `${env.APP_BASE_URL}/api/proposals/shared/${proposalId}/document?token=${accessToken}`;
+  }
+
+  async getDocumentForSharing(proposalId: string, accessToken: string): Promise<{ filePath: string }> {
+    const proposal = await this.proposalRepository.findByAccessTokenHash(proposalId, sha256(accessToken));
+    if (!proposal) {
+      throw new AppError("Proposal document access is invalid", 404, "PROPOSAL_DOCUMENT_NOT_FOUND");
+    }
+
+    if (proposal.status === "superseded") {
+      throw new AppError("Proposal document has been superseded by a newer version", 410, "PROPOSAL_DOCUMENT_SUPERSEDED");
+    }
+
+    return {
+      filePath: path.resolve(proposal.pdfPath)
+    };
+  }
+
   async generateForEnquiry(enquiryId: string) {
     const enquiry = await this.enquiryRepository.findById(enquiryId);
     if (!enquiry) {
       throw new AppError("Enquiry not found", 404, "ENQUIRY_NOT_FOUND");
+    }
+
+    if (["payment_pending", "payment_authorized", "booked", "completed", "cancelled"].includes(enquiry.status)) {
+      return null;
     }
 
     const customer = await this.customerRepository.findById(enquiry.customerId.toString());
@@ -49,13 +78,29 @@ export class ProposalService {
     const quotes = await this.quoteRepository.findByEnquiry(enquiryId);
     const vendors = await this.vendorRepository.list();
     const ranked = this.decisionEngineService.rankQuotes(enquiry, quotes, vendors);
+    const normalizedQuotes = ranked.filter((quote) => Boolean(quote.normalizedOffer));
 
-    if (ranked.length === 0) {
-      throw new AppError("No normalized quotes available for proposal generation", 422, "NO_QUOTES");
+    if (normalizedQuotes.length === 0) {
+      return null;
     }
 
-    const recommended = ranked[0];
-    const alternatives = ranked.slice(1, 3);
+    const openVendorRequests = await this.vendorRepository.findOpenVendorRequestsByEnquiry(enquiryId);
+    if (openVendorRequests.length > 0) {
+      return null;
+    }
+
+    const quoteSignature = this.buildQuoteSignature(normalizedQuotes.map((quote) => getEntityId(quote)).sort());
+    const latest = await this.proposalRepository.findLatestByEnquiry(enquiryId);
+    if (latest?.quoteSignature === quoteSignature) {
+      return latest;
+    }
+
+    if (latest && latest.status !== "superseded") {
+      await this.proposalRepository.updateStatus(getEntityId(latest), "superseded");
+    }
+
+    const recommended = normalizedQuotes[0];
+    const alternatives = normalizedQuotes.slice(1, 3);
     const copy = await this.openAIService.generateProposalCopy({
       customerName: customer.name,
       enquiryTitle: enquiry.title,
@@ -76,6 +121,7 @@ export class ProposalService {
     });
 
     const proposalRef = new Types.ObjectId().toString();
+    const accessToken = crypto.randomBytes(24).toString("hex");
     const pdfPath = await this.pdfService.generateProposalPdf({
       proposalId: proposalRef,
       customerName: customer.name,
@@ -92,18 +138,19 @@ export class ProposalService {
         totalAmount: quote.normalizedOffer?.totalAmount || 0,
         currency: quote.normalizedOffer?.currency || env.DEFAULT_CURRENCY,
         highlights: quote.normalizedOffer?.inclusions || []
-      }))
+        }))
     });
 
-    const latest = await this.proposalRepository.findLatestByEnquiry(enquiryId);
     const proposal = await this.proposalRepository.create({
       enquiryId: new Types.ObjectId(enquiryId),
       customerId: new Types.ObjectId(getEntityId(customer)),
-      quoteIds: ranked.map((quote) => new Types.ObjectId(getEntityId(quote))),
+      quoteIds: normalizedQuotes.map((quote) => new Types.ObjectId(getEntityId(quote))),
       recommendedQuoteId: new Types.ObjectId(getEntityId(recommended)),
       summary: copy.summary,
       premiumMessage: copy.premiumMessage,
       pdfPath,
+      quoteSignature,
+      accessTokenHash: sha256(accessToken),
       status: "sent",
       version: (latest?.version ?? 0) + 1
     });
@@ -114,7 +161,7 @@ export class ProposalService {
       status: "proposal_sent"
     });
 
-    const pdfUrl = `${env.APP_BASE_URL}/storage/proposals/${path.basename(pdfPath)}`;
+    const pdfUrl = this.buildDocumentUrl(getEntityId(proposal), accessToken);
     await this.notificationService.enqueue({
       type: "proposal-message",
       channel: "whatsapp",

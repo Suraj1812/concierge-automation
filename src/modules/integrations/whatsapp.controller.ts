@@ -57,29 +57,45 @@ export class WhatsAppWebhookController {
             continue;
           }
 
-          if (await this.webhookReceiptRepository.hasProcessed("whatsapp", message.id)) {
-            continue;
-          }
-
-          await conversationQueue.add(
-            "whatsapp-inbound",
-            {
-              phone: message.from,
-              name: contact?.profile?.name,
-              whatsappUserId: contact?.wa_id,
-              messageId: message.id,
-              text: message.text.body
-            },
-            {
-              jobId: `whatsapp:${message.id}`
-            }
-          );
-
-          await this.webhookReceiptRepository.markProcessed(
+          const receiptState = await this.webhookReceiptRepository.tryStartProcessing(
             "whatsapp",
             message.id,
             request.headers["x-hub-signature-256"] as string | undefined
           );
+
+          if (receiptState !== "acquired") {
+            continue;
+          }
+
+          try {
+            await conversationQueue.add(
+              "whatsapp-inbound",
+              {
+                phone: message.from,
+                name: contact?.profile?.name,
+                whatsappUserId: contact?.wa_id,
+                messageId: message.id,
+                text: message.text.body
+              },
+              {
+                jobId: `whatsapp:${message.id}`
+              }
+            );
+
+            await this.webhookReceiptRepository.markCompleted(
+              "whatsapp",
+              message.id,
+              request.headers["x-hub-signature-256"] as string | undefined
+            );
+          } catch (error) {
+            await this.webhookReceiptRepository.markFailed(
+              "whatsapp",
+              message.id,
+              (error as Error).message,
+              request.headers["x-hub-signature-256"] as string | undefined
+            );
+            throw error;
+          }
         }
       }
     }

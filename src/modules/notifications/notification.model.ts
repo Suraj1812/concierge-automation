@@ -11,6 +11,8 @@ export interface Notification {
   lastError?: string;
   scheduledAt?: Date;
   sentAt?: Date;
+  processingStartedAt?: Date;
+  lockExpiresAt?: Date;
   idempotencyKey: string;
 }
 
@@ -25,6 +27,8 @@ const notificationSchema = new Schema<Notification>(
     lastError: { type: String },
     scheduledAt: { type: Date },
     sentAt: { type: Date },
+    processingStartedAt: { type: Date },
+    lockExpiresAt: { type: Date, index: true },
     idempotencyKey: { type: String, required: true, unique: true, index: true }
   },
   {

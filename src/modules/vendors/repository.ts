@@ -76,12 +76,57 @@ export class VendorRepository {
     });
   }
 
-  async incrementAttempt(id: string, nextDueAt?: Date): Promise<void> {
+  async claimVendorRequestForDispatch(id: string, lockTtlMs = 2 * 60_000): Promise<VendorRequest | null> {
+    const now = new Date();
+    const lockExpiresAt = new Date(now.getTime() + lockTtlMs);
+
+    const document = await VendorRequestModel.findOneAndUpdate(
+      {
+        _id: id,
+        status: { $in: ["queued", "sent"] },
+        $or: [
+          { dispatchLockExpiresAt: { $exists: false } },
+          { dispatchLockExpiresAt: null },
+          { dispatchLockExpiresAt: { $lte: now } }
+        ]
+      },
+      {
+        $set: {
+          dispatchStartedAt: now,
+          dispatchLockExpiresAt: lockExpiresAt,
+          lastDispatchError: undefined
+        }
+      },
+      { new: true }
+    );
+
+    return document?.toObject() ?? null;
+  }
+
+  async completeVendorRequestDispatch(id: string, nextDueAt?: Date): Promise<void> {
     await VendorRequestModel.findByIdAndUpdate(id, {
       $inc: { attemptCount: 1 },
       $set: {
+        status: "sent",
         lastSentAt: new Date(),
-        ...(nextDueAt ? { responseDueAt: nextDueAt } : {})
+        ...(nextDueAt ? { responseDueAt: nextDueAt } : {}),
+        lastDispatchError: undefined
+      },
+      $unset: {
+        dispatchStartedAt: "",
+        dispatchLockExpiresAt: ""
+      }
+    });
+  }
+
+  async releaseVendorRequestDispatch(id: string, errorMessage: string): Promise<void> {
+    await VendorRequestModel.findByIdAndUpdate(id, {
+      $set: {
+        lastDispatchError: errorMessage
+      },
+      $unset: {
+        dispatchStartedAt: "",
+        dispatchLockExpiresAt: ""
       }
     });
   }
@@ -128,6 +173,10 @@ export class VendorRepository {
           status: "responded",
           lastResponseAt: new Date(),
           latestMessage
+        },
+        $unset: {
+          dispatchStartedAt: "",
+          dispatchLockExpiresAt: ""
         }
       }
     );

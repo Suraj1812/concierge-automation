@@ -11,7 +11,8 @@
     "start": "node dist/server.js",
     "start:worker": "node dist/worker.js",
     "lint": "tsc --noEmit -p tsconfig.json",
-    "test:smoke": "node --import tsx tests/e2e-smoke.ts"
+    "test:smoke": "node --import tsx tests/e2e-smoke.ts",
+    "test:hardening": "node --import tsx tests/hardening.integration.ts"
   },
   "engines": {
     "node": ">=20.11.0"

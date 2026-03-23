@@ -1,4 +1,5 @@
 import { Payment, PaymentModel } from "./payment.model";
+import { Types } from "mongoose";
 
 export class PaymentRepository {
   async create(payload: Payment): Promise<Payment> {
@@ -16,9 +17,60 @@ export class PaymentRepository {
     }).lean();
   }
 
+  async findLatestByProposal(proposalId: string): Promise<Payment | null> {
+    return PaymentModel.findOne({
+      proposalId: new Types.ObjectId(proposalId)
+    })
+      .sort({ createdAt: -1 })
+      .lean();
+  }
+
   async update(id: string, payload: Partial<Payment>): Promise<Payment | null> {
     const document = await PaymentModel.findByIdAndUpdate(id, { $set: payload }, { new: true });
     return document?.toObject() ?? null;
+  }
+
+  async claimForAutomation(id: string, lockTtlMs = 2 * 60_000): Promise<Payment | null> {
+    const now = new Date();
+    const lockExpiresAt = new Date(now.getTime() + lockTtlMs);
+
+    const document = await PaymentModel.findOneAndUpdate(
+      {
+        _id: id,
+        status: { $ne: "captured" },
+        $or: [
+          { workflowLockExpiresAt: { $exists: false } },
+          { workflowLockExpiresAt: null },
+          { workflowLockExpiresAt: { $lte: now } }
+        ]
+      },
+      {
+        $set: {
+          processingStartedAt: now,
+          workflowLockExpiresAt: lockExpiresAt,
+          lastWorkflowError: undefined
+        }
+      },
+      { new: true }
+    );
+
+    return document?.toObject() ?? null;
+  }
+
+  async releaseAutomationLock(id: string, errorMessage?: string): Promise<void> {
+    await PaymentModel.findByIdAndUpdate(id, {
+      ...(errorMessage
+        ? {
+            $set: {
+              lastWorkflowError: errorMessage
+            }
+          }
+        : {}),
+      $unset: {
+        processingStartedAt: "",
+        workflowLockExpiresAt: ""
+      }
+    });
   }
 
   async incrementRetryWithNewOrder(
@@ -40,6 +92,10 @@ export class PaymentRepository {
           createdAt: new Date(),
           status: "active"
         }
+      },
+      $unset: {
+        processingStartedAt: "",
+        workflowLockExpiresAt: ""
       }
     });
   }

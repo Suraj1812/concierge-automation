@@ -17,6 +17,8 @@ export interface Proposal {
   summary: string;
   premiumMessage: string;
   pdfPath: string;
+  quoteSignature: string;
+  accessTokenHash: string;
   status: (typeof proposalStatuses)[number];
   version: number;
 }
@@ -30,6 +32,8 @@ const proposalSchema = new Schema<Proposal>(
     summary: { type: String, required: true },
     premiumMessage: { type: String, required: true },
     pdfPath: { type: String, required: true },
+    quoteSignature: { type: String, required: true, index: true },
+    accessTokenHash: { type: String, required: true },
     status: { type: String, enum: proposalStatuses, default: "generated" },
     version: { type: Number, default: 1 }
   },

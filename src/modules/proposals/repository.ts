@@ -15,6 +15,13 @@ export class ProposalRepository {
     return ProposalModel.findOne({ enquiryId: new Types.ObjectId(enquiryId) }).sort({ version: -1 }).lean();
   }
 
+  async findByAccessTokenHash(proposalId: string, accessTokenHash: string): Promise<Proposal | null> {
+    return ProposalModel.findOne({
+      _id: new Types.ObjectId(proposalId),
+      accessTokenHash
+    }).lean();
+  }
+
   async updateStatus(id: string, status: Proposal["status"]): Promise<void> {
     await ProposalModel.findByIdAndUpdate(id, { $set: { status } });
   }

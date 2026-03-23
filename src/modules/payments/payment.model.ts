@@ -30,6 +30,9 @@ export interface Payment {
   expiresAt?: Date;
   orderHistory: PaymentOrderAttempt[];
   webhookEvents: PaymentWebhookEvent[];
+  processingStartedAt?: Date;
+  workflowLockExpiresAt?: Date;
+  lastWorkflowError?: string;
 }
 
 const paymentSchema = new Schema<Payment>(
@@ -61,7 +64,10 @@ const paymentSchema = new Schema<Payment>(
         payload: { type: Schema.Types.Mixed, required: true },
         receivedAt: { type: Date, required: true }
       }
-    ]
+    ],
+    processingStartedAt: { type: Date },
+    workflowLockExpiresAt: { type: Date, index: true },
+    lastWorkflowError: { type: String }
   },
   {
     timestamps: true

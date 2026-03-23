@@ -5,7 +5,7 @@ import { VendorRepository } from "./repository";
 import { EnquiryRepository } from "../enquiries/repository";
 import { WhatsAppService } from "../integrations/whatsapp.service";
 import { EmailService } from "../integrations/email.service";
-import { vendorFollowUpQueue } from "../../infrastructure/queue/queues";
+import { proposalGenerationQueue, vendorFollowUpQueue } from "../../infrastructure/queue/queues";
 
 export class VendorCommunicationService {
   constructor(
@@ -16,10 +16,15 @@ export class VendorCommunicationService {
   ) {}
 
   async sendVendorRequest(vendorRequestId: string): Promise<void> {
-    const vendorRequest = await this.vendorRepository.findVendorRequestById(vendorRequestId);
+    const vendorRequest = await this.vendorRepository.claimVendorRequestForDispatch(vendorRequestId);
 
     if (!vendorRequest) {
-      throw new AppError("Vendor request not found", 404, "VENDOR_REQUEST_NOT_FOUND");
+      const existing = await this.vendorRepository.findVendorRequestById(vendorRequestId);
+      if (!existing || !["queued", "sent"].includes(existing.status)) {
+        return;
+      }
+
+      return;
     }
 
     const enquiry = await this.enquiryRepository.findById(vendorRequest.enquiryId.toString());
@@ -43,24 +48,28 @@ export class VendorCommunicationService {
       throw new AppError("Vendor has no configured contact point", 422, "VENDOR_CONTACT_MISSING");
     }
 
-    if (contact.channel === "whatsapp") {
-      await this.whatsAppService.sendTextMessage(contact.value, message);
-    } else if (contact.channel === "email") {
-      await this.emailService.sendVendorRequest(contact.value, `Concierge request: ${enquiry.title}`, message);
-    }
-
-    const nextDueAt = addMinutes(new Date(), env.VENDOR_RESPONSE_TIMEOUT_MINUTES);
-    await this.vendorRepository.incrementAttempt(vendorRequestId, nextDueAt);
-    await this.vendorRepository.updateVendorRequestStatus(vendorRequestId, "sent", { responseDueAt: nextDueAt });
-
-    await vendorFollowUpQueue.add(
-      "vendor-follow-up",
-      { vendorRequestId },
-      {
-        delay: env.VENDOR_RESPONSE_TIMEOUT_MINUTES * 60_000,
-        jobId: `follow-up:${vendorRequestId}:${vendorRequest.attemptCount + 1}`
+    try {
+      if (contact.channel === "whatsapp") {
+        await this.whatsAppService.sendTextMessage(contact.value, message);
+      } else if (contact.channel === "email") {
+        await this.emailService.sendVendorRequest(contact.value, `Concierge request: ${enquiry.title}`, message);
       }
-    );
+
+      const nextDueAt = addMinutes(new Date(), env.VENDOR_RESPONSE_TIMEOUT_MINUTES);
+      await this.vendorRepository.completeVendorRequestDispatch(vendorRequestId, nextDueAt);
+
+      await vendorFollowUpQueue.add(
+        "vendor-follow-up",
+        { vendorRequestId },
+        {
+          delay: env.VENDOR_RESPONSE_TIMEOUT_MINUTES * 60_000,
+          jobId: `follow-up:${vendorRequestId}:${vendorRequest.attemptCount + 1}`
+        }
+      );
+    } catch (error) {
+      await this.vendorRepository.releaseVendorRequestDispatch(vendorRequestId, (error as Error).message);
+      throw error;
+    }
   }
 
   async followUpVendorRequest(vendorRequestId: string): Promise<void> {
@@ -72,6 +81,13 @@ export class VendorCommunicationService {
 
     if (vendorRequest.attemptCount >= env.MAX_VENDOR_RETRY_ATTEMPTS) {
       await this.vendorRepository.updateVendorRequestStatus(vendorRequestId, "timed_out");
+      await proposalGenerationQueue.add(
+        "proposal-generation",
+        { enquiryId: vendorRequest.enquiryId.toString() },
+        {
+          jobId: `proposal-generation:${vendorRequest.enquiryId.toString()}`
+        }
+      );
       return;
     }
 

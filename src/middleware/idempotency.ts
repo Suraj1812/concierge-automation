@@ -18,32 +18,59 @@ export const idempotencyMiddleware = async (request: Request, response: Response
     method: request.method,
     route: request.originalUrl,
     body: request.body
-  }));
+    }));
 
-  const existing = await repository.findByKey(key);
+  const started = await repository.startProcessing({
+    key,
+    route: request.originalUrl,
+    method: request.method,
+    requestHash,
+    expiresAt: addMinutes(new Date(), 24 * 60),
+    lockTtlMs: 5 * 60_000
+  });
 
-  if (existing) {
-    if (existing.requestHash !== requestHash) {
-      next(new AppError("Idempotency key reuse with different payload is not allowed", 409, "IDEMPOTENCY_CONFLICT"));
-      return;
-    }
+  if (started.record && started.record.requestHash !== requestHash) {
+    next(new AppError("Idempotency key reuse with different payload is not allowed", 409, "IDEMPOTENCY_CONFLICT"));
+    return;
+  }
 
-    response.status(existing.responseStatus).json(existing.responseBody);
+  if (started.outcome === "replay" && started.record?.responseStatus && started.record.responseBody) {
+    response.status(started.record.responseStatus).json(started.record.responseBody);
+    return;
+  }
+
+  if (started.outcome === "in_progress") {
+    next(new AppError("A request with this idempotency key is already being processed", 409, "IDEMPOTENCY_IN_PROGRESS"));
     return;
   }
 
   const originalJson = response.json.bind(response);
+  let responseCaptured = false;
+  let responseBody: Record<string, unknown> | undefined;
 
-  response.json = ((body: Record<string, unknown>) => {
-    void repository.create({
-      key,
-      route: request.originalUrl,
-      method: request.method,
-      requestHash,
-      responseStatus: response.statusCode,
-      responseBody: body,
-      expiresAt: addMinutes(new Date(), 24 * 60)
-    });
+  response.on("finish", () => {
+    if (!responseCaptured) {
+      void repository.fail(key, `Request finished without a JSON response (status ${response.statusCode})`);
+      return;
+    }
+
+    if (response.statusCode >= 500) {
+      void repository.fail(key, `Request failed with status ${response.statusCode}`);
+      return;
+    }
+
+    void repository.complete(key, response.statusCode, responseBody ?? {});
+  });
+
+  response.on("close", () => {
+    if (!response.writableEnded) {
+      void repository.fail(key, "Connection closed before the response completed");
+    }
+  });
+
+  response.json = ((body: unknown) => {
+    responseCaptured = true;
+    responseBody = typeof body === "object" && body !== null ? body as Record<string, unknown> : { value: body };
     return originalJson(body);
   }) as Response["json"];
 

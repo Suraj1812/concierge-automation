@@ -29,25 +29,41 @@ export class VendorResponseController {
 
     const eventId = (request.body.externalEventId as string | undefined) || sha256(JSON.stringify(request.body));
 
-    if (await this.webhookReceiptRepository.hasProcessed("vendor", eventId)) {
-      response.status(200).json({ success: true, duplicate: true });
-      return;
-    }
-
-    const data = await this.vendorResponseService.processReply({
-      vendorReference: request.body.vendorReference,
-      vendorId: request.body.vendorId,
-      enquiryId: request.body.enquiryId,
-      rawPayload: request.body.rawPayload,
-      expiresAt: request.body.expiresAt
-    });
-
-    await this.webhookReceiptRepository.markProcessed(
+    const receiptState = await this.webhookReceiptRepository.tryStartProcessing(
       "vendor",
       eventId,
       request.headers["x-vendor-signature"] as string | undefined
     );
 
-    response.status(202).json({ success: true, data });
+    if (receiptState !== "acquired") {
+      response.status(200).json({ success: true, duplicate: true });
+      return;
+    }
+
+    try {
+      const data = await this.vendorResponseService.processReply({
+        vendorReference: request.body.vendorReference,
+        vendorId: request.body.vendorId,
+        enquiryId: request.body.enquiryId,
+        rawPayload: request.body.rawPayload,
+        expiresAt: request.body.expiresAt
+      });
+
+      await this.webhookReceiptRepository.markCompleted(
+        "vendor",
+        eventId,
+        request.headers["x-vendor-signature"] as string | undefined
+      );
+
+      response.status(202).json({ success: true, data });
+    } catch (error) {
+      await this.webhookReceiptRepository.markFailed(
+        "vendor",
+        eventId,
+        (error as Error).message,
+        request.headers["x-vendor-signature"] as string | undefined
+      );
+      throw error;
+    }
   };
 }

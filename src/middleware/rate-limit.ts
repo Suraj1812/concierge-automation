@@ -6,6 +6,7 @@ export const apiRateLimit = rateLimit({
   max: env.RATE_LIMIT_MAX_REQUESTS,
   standardHeaders: true,
   legacyHeaders: false,
+  skip: (request) => request.originalUrl.startsWith("/api/webhooks/"),
   message: {
     success: false,
     code: "RATE_LIMITED",
@@ -18,4 +19,16 @@ export const authRateLimit = rateLimit({
   max: 10,
   standardHeaders: true,
   legacyHeaders: false
+});
+
+export const webhookRateLimit = rateLimit({
+  windowMs: 60_000,
+  max: env.RATE_LIMIT_MAX_REQUESTS * 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    success: false,
+    code: "WEBHOOK_RATE_LIMITED",
+    message: "Webhook traffic exceeded the permitted threshold"
+  }
 });

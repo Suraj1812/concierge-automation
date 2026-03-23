@@ -131,11 +131,14 @@ flowchart LR
 ### Public Endpoints
 
 - `GET /api/health`
+- `GET /api/health/live`
+- `GET /api/health/ready`
+- `GET /api/health/metrics`
 - `GET /api/webhooks/whatsapp`
 - `POST /api/webhooks/whatsapp`
 - `POST /api/webhooks/vendor-responses`
 - `POST /api/payments/webhook`
-- `GET /storage/*`
+- `GET /api/proposals/shared/:proposalId/document?token=...`
 
 ### Admin Endpoints
 
@@ -334,7 +337,7 @@ I need a 3-night luxury villa in Dubai for 6 guests next month, ideally beachfro
 
 1. `POST /api/payments/webhook`
 2. Signature verified using `RAZORPAY_WEBHOOK_SECRET`
-3. `WebhookReceipt` deduplicates replayed events
+3. `WebhookReceipt` claims processing atomically and deduplicates replayed events
 4. Payment record stores raw event
 5. On `payment.captured`, booking lifecycle job is queued
 
@@ -355,7 +358,7 @@ I need a 3-night luxury villa in Dubai for 6 guests next month, ideally beachfro
 
 ### Proposal / Conversation Automation
 
-- proposal generation is triggered automatically after quote normalization
+- proposal generation is triggered only after quote normalization completes and vendor collection is no longer open
 - inbound WhatsApp turns can auto-trigger vendor matching
 - customer clarification and proposal review follow-ups run from delayed queue jobs
 

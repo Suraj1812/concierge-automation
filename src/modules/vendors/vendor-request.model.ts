@@ -12,6 +12,9 @@ export interface VendorRequest {
   responseDueAt?: Date;
   vendorReference?: string;
   latestMessage?: string;
+  dispatchStartedAt?: Date;
+  dispatchLockExpiresAt?: Date;
+  lastDispatchError?: string;
 }
 
 const vendorRequestSchema = new Schema<VendorRequest>(
@@ -25,7 +28,10 @@ const vendorRequestSchema = new Schema<VendorRequest>(
     attemptCount: { type: Number, default: 0 },
     responseDueAt: { type: Date },
     vendorReference: { type: String },
-    latestMessage: { type: String }
+    latestMessage: { type: String },
+    dispatchStartedAt: { type: Date },
+    dispatchLockExpiresAt: { type: Date, index: true },
+    lastDispatchError: { type: String }
   },
   {
     timestamps: true

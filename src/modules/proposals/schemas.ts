@@ -11,3 +11,12 @@ export const proposalIdParamsSchema = z.object({
     proposalId: z.string().min(1)
   })
 });
+
+export const proposalDocumentAccessSchema = z.object({
+  params: z.object({
+    proposalId: z.string().min(1)
+  }),
+  query: z.object({
+    token: z.string().min(32)
+  })
+});

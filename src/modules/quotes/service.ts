@@ -73,15 +73,18 @@ export class QuoteService {
       status: "quote_normalizing"
     });
 
-    await proposalGenerationQueue.add(
-      "proposal-generation",
-      {
-        enquiryId: quote.enquiryId.toString()
-      },
-      {
-        jobId: `proposal-generation:${quote.enquiryId.toString()}`
-      }
-    );
+    const openVendorRequests = await this.vendorRepository.findOpenVendorRequestsByEnquiry(quote.enquiryId.toString());
+    if (openVendorRequests.length === 0) {
+      await proposalGenerationQueue.add(
+        "proposal-generation",
+        {
+          enquiryId: quote.enquiryId.toString()
+        },
+        {
+          jobId: `proposal-generation:${quote.enquiryId.toString()}`
+        }
+      );
+    }
   }
 
   async rankEnquiryQuotes(enquiryId: string) {

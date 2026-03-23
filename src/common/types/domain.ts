@@ -55,7 +55,7 @@ export type QuoteStatus = (typeof quoteStatuses)[number];
 export const vendorRequestStatuses = ["queued", "sent", "responded", "timed_out", "failed", "closed"] as const;
 export type VendorRequestStatus = (typeof vendorRequestStatuses)[number];
 
-export const notificationStatuses = ["pending", "sent", "failed"] as const;
+export const notificationStatuses = ["pending", "processing", "sent", "failed"] as const;
 export type NotificationStatus = (typeof notificationStatuses)[number];
 
 export const communicationChannels = ["whatsapp", "email", "portal"] as const;

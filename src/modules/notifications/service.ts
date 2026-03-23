@@ -41,21 +41,31 @@ export class NotificationService {
       throw error;
     }
 
-    await notificationQueue.add(
-      payload.type,
-      { notificationId: getEntityId(notification) },
-      {
-        delay: payload.delayMs,
-        jobId: payload.idempotencyKey
-      }
-    );
+    try {
+      await notificationQueue.add(
+        payload.type,
+        { notificationId: getEntityId(notification) },
+        {
+          delay: payload.delayMs,
+          jobId: payload.idempotencyKey
+        }
+      );
+    } catch (error) {
+      await this.notificationRepository.markQueueingFailure(getEntityId(notification), (error as Error).message);
+      throw error;
+    }
   }
 
   async process(notificationId: string): Promise<void> {
-    const notification = await this.notificationRepository.findById(notificationId);
+    const notification = await this.notificationRepository.claimForProcessing(notificationId);
 
     if (!notification) {
-      throw new AppError("Notification not found", 404, "NOTIFICATION_NOT_FOUND");
+      const existing = await this.notificationRepository.findById(notificationId);
+      if (!existing || existing.status === "sent") {
+        return;
+      }
+
+      return;
     }
 
     try {

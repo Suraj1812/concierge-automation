@@ -12,6 +12,12 @@ type AiTurnPayload = {
   missingFields: string[];
 };
 
+type EnquiryUpdateResult = {
+  enquiry: Enquiry;
+  createdNewEnquiry: boolean;
+  materialChangeDetected: boolean;
+};
+
 export class EnquiryService {
   constructor(private readonly enquiryRepository: EnquiryRepository) {}
 
@@ -32,7 +38,25 @@ export class EnquiryService {
     };
   }
 
-  async createOrUpdateFromAi(customerId: string, existingEnquiry: Enquiry | null, aiTurn: AiTurnPayload): Promise<Enquiry> {
+  private hasMaterialChange(existingEnquiry: Enquiry, aiTurn: AiTurnPayload): boolean {
+    const incomingRequirements = aiTurn.extractedRequirements;
+    const existingRequirements = existingEnquiry.requirements;
+    const preferenceSignature = (value?: string[]) => [...(value ?? [])].sort().join("|");
+
+    return (
+      (aiTurn.serviceType && aiTurn.serviceType !== existingEnquiry.serviceType)
+      || existingRequirements.destination !== incomingRequirements.destination
+      || existingRequirements.startDate !== incomingRequirements.startDate
+      || existingRequirements.endDate !== incomingRequirements.endDate
+      || existingRequirements.guestCount !== incomingRequirements.guestCount
+      || existingRequirements.budgetMin !== incomingRequirements.budgetMin
+      || existingRequirements.budgetMax !== incomingRequirements.budgetMax
+      || preferenceSignature(existingRequirements.preferences) !== preferenceSignature(incomingRequirements.preferences)
+    );
+  }
+
+  async createOrUpdateFromAi(customerId: string, existingEnquiry: Enquiry | null, aiTurn: AiTurnPayload): Promise<EnquiryUpdateResult> {
+    const materialChangeDetected = existingEnquiry ? this.hasMaterialChange(existingEnquiry, aiTurn) : false;
     const requirements = this.mergeRequirements(existingEnquiry?.requirements, aiTurn.extractedRequirements);
     const status: Enquiry["status"] = aiTurn.missingFields.length > 0 ? "awaiting_clarification" : "vendor_matching";
     const basePayload = {
@@ -51,18 +75,46 @@ export class EnquiryService {
       slaDueAt: addMinutes(new Date(), 30)
     };
 
+    const shouldForkEnquiry = existingEnquiry
+      && materialChangeDetected
+      && ["awaiting_vendor_quotes", "quote_normalizing", "proposal_sent", "payment_pending", "payment_authorized", "booked"].includes(existingEnquiry.status);
+
+    if (shouldForkEnquiry) {
+      await this.enquiryRepository.updateStatus(getEntityId(existingEnquiry), "stalled");
+      const enquiry = await this.enquiryRepository.create({
+        ...basePayload,
+        matchedVendorIds: []
+      } as Enquiry);
+
+      return {
+        enquiry,
+        createdNewEnquiry: true,
+        materialChangeDetected: true
+      };
+    }
+
     if (existingEnquiry) {
       const updated = await this.enquiryRepository.update(getEntityId(existingEnquiry), basePayload);
       if (!updated) {
         throw new Error("Failed to update enquiry");
       }
-      return updated;
+      return {
+        enquiry: updated,
+        createdNewEnquiry: false,
+        materialChangeDetected
+      };
     }
 
-    return this.enquiryRepository.create({
+    const enquiry = await this.enquiryRepository.create({
       ...basePayload,
       matchedVendorIds: []
     } as Enquiry);
+
+    return {
+      enquiry,
+      createdNewEnquiry: true,
+      materialChangeDetected: false
+    };
   }
 
   async markMatched(enquiryId: string, vendorIds: string[]): Promise<void> {

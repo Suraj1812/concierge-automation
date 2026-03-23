@@ -1,8 +1,8 @@
 import express from "express";
 import helmet from "helmet";
 import cors from "cors";
-import path from "path";
 import { attachRequestContext } from "./infrastructure/http/request-context";
+import { requestLogger } from "./infrastructure/http/request-logger";
 import { apiRateLimit } from "./middleware/rate-limit";
 import { router } from "./routes";
 import { errorHandler, notFoundHandler } from "./infrastructure/http/error-handler";
@@ -12,6 +12,7 @@ export const app = express();
 app.use(helmet());
 app.use(cors());
 app.use(attachRequestContext);
+app.use(requestLogger);
 app.use(
   express.json({
     limit: "1mb",
@@ -28,8 +29,6 @@ app.use(
     }
   })
 );
-app.use(apiRateLimit);
-app.use("/storage", express.static(path.resolve(process.cwd(), "storage")));
-app.use("/api", router);
+app.use("/api", apiRateLimit, router);
 app.use(notFoundHandler);
 app.use(errorHandler);
