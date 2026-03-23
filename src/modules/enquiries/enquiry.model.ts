@@ -1,5 +1,6 @@
 import { HydratedDocument, Schema, Types, model } from "mongoose";
 import { enquiryStatuses, serviceTypes, type EnquiryStatus, type ServiceType } from "../../common/types/domain";
+import { tenantScopedPlugin } from "../../infrastructure/tenancy/tenant-scoped.plugin";
 
 export interface EnquiryRequirements {
   destination?: string;
@@ -65,6 +66,7 @@ const enquirySchema = new Schema<Enquiry>(
 );
 
 enquirySchema.index({ customerId: 1, createdAt: -1 });
+enquirySchema.plugin(tenantScopedPlugin);
 
 export const EnquiryModel = model<Enquiry>("Enquiry", enquirySchema);
 export type EnquiryDocument = HydratedDocument<Enquiry>;

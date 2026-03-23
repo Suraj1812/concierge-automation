@@ -1,9 +1,10 @@
 import { Types } from "mongoose";
 import { Quote, QuoteModel } from "./quote.model";
+import { attachTenantPayload } from "../../infrastructure/tenancy/attach-tenant-payload";
 
 export class QuoteRepository {
   async create(payload: Quote): Promise<Quote> {
-    const document = await QuoteModel.create(payload);
+    const document = await QuoteModel.create(attachTenantPayload(payload as unknown as Record<string, unknown>));
     return document.toObject();
   }
 

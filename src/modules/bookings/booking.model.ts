@@ -1,5 +1,6 @@
 import { HydratedDocument, Schema, Types, model } from "mongoose";
 import { bookingStatuses } from "../../common/types/domain";
+import { tenantScopedPlugin } from "../../infrastructure/tenancy/tenant-scoped.plugin";
 
 export interface Booking {
   enquiryId: Types.ObjectId;
@@ -31,6 +32,9 @@ const bookingSchema = new Schema<Booking>(
     timestamps: true
   }
 );
+
+bookingSchema.plugin(tenantScopedPlugin);
+bookingSchema.index({ tenantId: 1, enquiryId: 1 }, { unique: true });
 
 export const BookingModel = model<Booking>("Booking", bookingSchema);
 export type BookingDocument = HydratedDocument<Booking>;

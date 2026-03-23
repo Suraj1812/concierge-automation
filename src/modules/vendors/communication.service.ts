@@ -6,6 +6,8 @@ import { EnquiryRepository } from "../enquiries/repository";
 import { WhatsAppService } from "../integrations/whatsapp.service";
 import { EmailService } from "../integrations/email.service";
 import { proposalGenerationQueue, vendorFollowUpQueue } from "../../infrastructure/queue/queues";
+import { getCurrentTenantId } from "../../infrastructure/tenancy/tenant-context";
+import { resolveCurrentTenantConfig } from "../tenants/runtime-config";
 
 export class VendorCommunicationService {
   constructor(
@@ -49,6 +51,7 @@ export class VendorCommunicationService {
     }
 
     try {
+      const tenantConfig = await resolveCurrentTenantConfig();
       if (contact.channel === "whatsapp") {
         await this.whatsAppService.sendTextMessage(contact.value, message);
       } else if (contact.channel === "email") {
@@ -60,7 +63,10 @@ export class VendorCommunicationService {
 
       await vendorFollowUpQueue.add(
         "vendor-follow-up",
-        { vendorRequestId },
+        {
+          tenantId: getCurrentTenantId(),
+          vendorRequestId
+        },
         {
           delay: env.VENDOR_RESPONSE_TIMEOUT_MINUTES * 60_000,
           jobId: `follow-up:${vendorRequestId}:${vendorRequest.attemptCount + 1}`
@@ -79,11 +85,15 @@ export class VendorCommunicationService {
       return;
     }
 
-    if (vendorRequest.attemptCount >= env.MAX_VENDOR_RETRY_ATTEMPTS) {
+    const tenantConfig = await resolveCurrentTenantConfig();
+    if (vendorRequest.attemptCount >= tenantConfig.automation.vendorRetryLimit) {
       await this.vendorRepository.updateVendorRequestStatus(vendorRequestId, "timed_out");
       await proposalGenerationQueue.add(
         "proposal-generation",
-        { enquiryId: vendorRequest.enquiryId.toString() },
+        {
+          tenantId: getCurrentTenantId(),
+          enquiryId: vendorRequest.enquiryId.toString()
+        },
         {
           jobId: `proposal-generation:${vendorRequest.enquiryId.toString()}`
         }

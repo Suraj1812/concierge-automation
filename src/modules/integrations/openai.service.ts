@@ -4,6 +4,10 @@ import { env } from "../../config/env";
 import { serviceTypes, conversationStates } from "../../common/types/domain";
 import { safeJsonParse } from "../../common/utils/json";
 import { AppError } from "../../common/errors/AppError";
+import { CircuitBreaker } from "../../infrastructure/resilience/circuit-breaker";
+import { withTimeout } from "../../common/utils/timeout";
+import { resolveCurrentTenantConfig } from "../tenants/runtime-config";
+import { recordUsageEvent } from "../usage/recorder";
 
 const customerTurnSchema = z.object({
   replyText: z.string().min(1),
@@ -62,27 +66,34 @@ const proposalCopySchema = z.object({
 
 export class OpenAIService {
   private readonly client: OpenAI;
+  private readonly circuitBreaker = new CircuitBreaker(4, 20_000);
 
   constructor() {
     this.client = new OpenAI({ apiKey: env.OPENAI_API_KEY });
   }
 
   private async createJsonCompletion(systemPrompt: string, userPrompt: string): Promise<Record<string, unknown>> {
-    const completion = await this.client.chat.completions.create({
-      model: env.OPENAI_MODEL,
-      temperature: 0.2,
-      response_format: { type: "json_object" },
-      messages: [
-        {
-          role: "system",
-          content: systemPrompt
-        },
-        {
-          role: "user",
-          content: userPrompt
-        }
-      ]
-    });
+    const completion = await this.circuitBreaker.execute(async () =>
+      withTimeout(
+        this.client.chat.completions.create({
+          model: env.OPENAI_MODEL,
+          temperature: 0.2,
+          response_format: { type: "json_object" },
+          messages: [
+            {
+              role: "system",
+              content: systemPrompt
+            },
+            {
+              role: "user",
+              content: userPrompt
+            }
+          ]
+        }),
+        20_000,
+        () => new AppError("OpenAI request timed out", 504, "AI_TIMEOUT")
+      )
+    );
 
     const content = completion.choices[0]?.message?.content;
 
@@ -96,6 +107,10 @@ export class OpenAIService {
       throw new AppError("OpenAI response was not valid JSON", 502, "AI_INVALID_JSON");
     }
 
+    await recordUsageEvent("ai.completion", 1, {
+      model: env.OPENAI_MODEL
+    });
+
     return parsed;
   }
 
@@ -107,15 +122,21 @@ export class OpenAIService {
     history: Array<{ role: string; text: string }>;
     latestCustomerMessage: string;
   }) {
+    const tenantConfig = await resolveCurrentTenantConfig();
     const systemPrompt = `
 You are an AI concierge for a luxury concierge SaaS platform.
 Return only JSON.
 You must:
-1. Reply in a premium, warm, polished, human-like tone.
+1. Reply in a ${tenantConfig.ai.tone}, warm, polished, human-like tone.
 2. Decide whether to clarify missing details or proceed to vendor matching.
 3. Extract structured requirements.
 4. Preserve continuity using customer memory and the active enquiry.
 5. Keep WhatsApp replies concise, high-signal, and service-oriented.
+6. Never invent vendor availability, pricing, or confirmed bookings.
+7. Use clarification questions when facts are missing.
+8. Follow this style guide when available: ${tenantConfig.ai.styleGuide || "Concise, polished, human, service-first."}
+9. Clarification strategy: ${tenantConfig.ai.clarificationStrategy}
+10. Guardrails: ${tenantConfig.ai.hallucinationGuardrails.join(" | ")}
 `;
 
     const userPrompt = JSON.stringify(payload, null, 2);
@@ -124,8 +145,7 @@ You must:
 
     if (!result.success) {
       return {
-        replyText:
-          "Thank you. I’m curating the right options for you and just need a couple of details to proceed smoothly. Could you share your destination and preferred dates?",
+        replyText: tenantConfig.ai.fallbackReply,
         summary: "Fallback concierge clarification response",
         title: "Concierge enquiry",
         serviceType: undefined,
@@ -163,11 +183,14 @@ Keep the summary factual and concise.
     alternatives: Record<string, unknown>[];
     customerMemory?: string;
   }) {
+    const tenantConfig = await resolveCurrentTenantConfig();
     const systemPrompt = `
 You write premium luxury concierge proposals for high-value clients.
 Return only JSON.
 The premiumMessage must feel polished, concise, reassuring, and suitable for WhatsApp.
 The summary should be suitable for a PDF proposal body.
+The company brand is ${tenantConfig.proposal.companyName}.
+Use this style guide when helpful: ${tenantConfig.ai.styleGuide || "Concise, polished, human, service-first."}
 `;
 
     const parsed = await this.createJsonCompletion(systemPrompt, JSON.stringify(payload, null, 2));

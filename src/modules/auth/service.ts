@@ -1,15 +1,25 @@
 import bcrypt from "bcryptjs";
+import { Types } from "mongoose";
 import jwt, { SignOptions } from "jsonwebtoken";
 import { env } from "../../config/env";
 import { AppError } from "../../common/errors/AppError";
 import { AuthRepository } from "./repository";
 import { AdminUser } from "./admin.model";
+import { TenantService } from "../tenants/service";
 
 export class AuthService {
-  constructor(private readonly authRepository: AuthRepository) {}
+  constructor(
+    private readonly authRepository: AuthRepository,
+    private readonly tenantService: TenantService
+  ) {}
 
-  async login(email: string, password: string): Promise<{ token: string; admin: Pick<AdminUser, "email" | "name" | "role"> }> {
-    const admin = await this.authRepository.findByEmail(email);
+  async login(
+    email: string,
+    password: string,
+    tenantSlug?: string
+  ): Promise<{ token: string; admin: Pick<AdminUser, "email" | "name" | "role"> & { tenantId: string; tenantSlug: string } }> {
+    const tenant = await this.tenantService.resolveBySlug(tenantSlug);
+    const admin = await this.authRepository.findByEmail(email, String((tenant as unknown as { _id?: unknown })._id || (tenant as unknown as { id?: string }).id));
 
     if (!admin || !admin.isActive) {
       throw new AppError("Invalid credentials", 401, "INVALID_CREDENTIALS");
@@ -26,7 +36,9 @@ export class AuthService {
     const token = jwt.sign(
       {
         email: admin.email,
-        role: admin.role
+        role: admin.role,
+        tenantId: admin.tenantId.toString(),
+        tenantSlug: tenant.slug
       },
       env.JWT_SECRET,
       {
@@ -40,13 +52,17 @@ export class AuthService {
       admin: {
         email: admin.email,
         name: admin.name,
-        role: admin.role
+        role: admin.role,
+        tenantId: admin.tenantId.toString(),
+        tenantSlug: tenant.slug
       }
     };
   }
 
   async seedDefaultAdmin(): Promise<void> {
-    const existing = await this.authRepository.findByEmail(env.ADMIN_EMAIL);
+    const tenant = await this.tenantService.seedDefaultTenant();
+    const tenantId = String((tenant as unknown as { _id?: unknown })._id || (tenant as unknown as { id?: string }).id);
+    const existing = await this.authRepository.findByEmail(env.ADMIN_EMAIL, tenantId);
 
     if (existing) {
       return;
@@ -55,6 +71,7 @@ export class AuthService {
     const passwordHash = await bcrypt.hash(env.ADMIN_PASSWORD, 12);
 
     await this.authRepository.create({
+      tenantId: new Types.ObjectId(tenantId),
       email: env.ADMIN_EMAIL,
       name: env.ADMIN_NAME,
       passwordHash,

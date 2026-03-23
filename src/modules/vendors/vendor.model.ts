@@ -1,5 +1,6 @@
 import { HydratedDocument, Schema, model } from "mongoose";
 import { communicationChannels, serviceTypes, type CommunicationChannel } from "../../common/types/domain";
+import { tenantScopedPlugin } from "../../infrastructure/tenancy/tenant-scoped.plugin";
 
 export interface VendorContact {
   channel: CommunicationChannel;
@@ -46,6 +47,7 @@ const vendorSchema = new Schema<Vendor>(
 
 vendorSchema.index({ supportedServices: 1, isActive: 1 });
 vendorSchema.index({ geoCoverage: 1, isActive: 1 });
+vendorSchema.plugin(tenantScopedPlugin);
 
 export const VendorModel = model<Vendor>("Vendor", vendorSchema);
 export type VendorDocument = HydratedDocument<Vendor>;

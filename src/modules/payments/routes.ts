@@ -3,11 +3,9 @@ import { asyncHandler } from "../../common/utils/async-handler";
 import { requireAdminAuth } from "../../middleware/auth";
 import { validate } from "../../middleware/validate";
 import { idempotencyMiddleware } from "../../middleware/idempotency";
-import { webhookRateLimit } from "../../middleware/rate-limit";
-import { createOrderSchema, razorpayWebhookSchema } from "./schemas";
+import { createOrderSchema } from "./schemas";
 import { paymentController } from "../../container";
 
 export const paymentRoutes = Router();
 
-paymentRoutes.post("/webhook", webhookRateLimit, validate(razorpayWebhookSchema), asyncHandler(paymentController.handleWebhook));
 paymentRoutes.post("/orders", requireAdminAuth, idempotencyMiddleware, validate(createOrderSchema), asyncHandler(paymentController.createOrder));

@@ -1,5 +1,6 @@
 import { HydratedDocument, Schema, Types, model } from "mongoose";
 import { conversationStates, type ConversationState } from "../../common/types/domain";
+import { tenantScopedPlugin } from "../../infrastructure/tenancy/tenant-scoped.plugin";
 
 export interface ConversationMessage {
   direction: "inbound" | "outbound";
@@ -51,6 +52,7 @@ const conversationSchema = new Schema<Conversation>(
 );
 
 conversationSchema.index({ customerId: 1, status: 1, updatedAt: -1 });
+conversationSchema.plugin(tenantScopedPlugin);
 
 export const ConversationModel = model<Conversation>("Conversation", conversationSchema);
 export type ConversationDocument = HydratedDocument<Conversation>;

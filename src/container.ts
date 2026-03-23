@@ -1,6 +1,11 @@
 import { AuthRepository } from "./modules/auth/repository";
 import { AuthService } from "./modules/auth/service";
 import { AuthController } from "./modules/auth/controller";
+import { TenantRepository } from "./modules/tenants/repository";
+import { TenantService } from "./modules/tenants/service";
+import { TenantController } from "./modules/tenants/controller";
+import { DashboardService } from "./modules/dashboard/service";
+import { DashboardController } from "./modules/dashboard/controller";
 import { AuditRepository } from "./modules/audit/repository";
 import { AuditService } from "./modules/audit/service";
 import { AuditController } from "./modules/audit/controller";
@@ -40,14 +45,23 @@ import { ConversationController } from "./modules/conversations/controller";
 import { ConversationService } from "./modules/conversations/service";
 import { WebhookReceiptRepository } from "./modules/integrations/webhook-receipt.repository";
 import { WhatsAppWebhookController } from "./modules/integrations/whatsapp.controller";
+import { EmailMessageRepository } from "./modules/emails/repository";
+import { EmailAutomationService } from "./modules/emails/service";
+import { EmailAutomationController } from "./modules/emails/controller";
+
+export const tenantRepository = new TenantRepository();
+export const tenantService = new TenantService(tenantRepository);
+export const tenantController = new TenantController(tenantService);
 
 export const authRepository = new AuthRepository();
-export const authService = new AuthService(authRepository);
+export const authService = new AuthService(authRepository, tenantService);
 export const authController = new AuthController(authService);
 
 export const auditRepository = new AuditRepository();
 export const auditService = new AuditService(auditRepository);
 export const auditController = new AuditController(auditService);
+export const dashboardService = new DashboardService();
+export const dashboardController = new DashboardController(dashboardService);
 
 export const customerRepository = new CustomerRepository();
 export const customerService = new CustomerService(customerRepository);
@@ -76,6 +90,16 @@ export const vendorCommunicationService = new VendorCommunicationService(
 
 export const notificationRepository = new NotificationRepository();
 export const notificationService = new NotificationService(notificationRepository, whatsAppService, emailService);
+export const emailMessageRepository = new EmailMessageRepository();
+export const emailAutomationService = new EmailAutomationService(
+  emailMessageRepository,
+  customerService,
+  enquiryService,
+  openAIService,
+  emailService,
+  vendorService
+);
+export const emailAutomationController = new EmailAutomationController(emailAutomationService);
 
 export const decisionEngineService = new DecisionEngineService();
 export const quoteRepository = new QuoteRepository();

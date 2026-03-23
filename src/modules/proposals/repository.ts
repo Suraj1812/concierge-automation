@@ -1,9 +1,10 @@
 import { Types } from "mongoose";
 import { Proposal, ProposalModel } from "./proposal.model";
+import { attachTenantPayload } from "../../infrastructure/tenancy/attach-tenant-payload";
 
 export class ProposalRepository {
   async create(payload: Proposal): Promise<Proposal> {
-    const document = await ProposalModel.create(payload);
+    const document = await ProposalModel.create(attachTenantPayload(payload as unknown as Record<string, unknown>));
     return document.toObject();
   }
 

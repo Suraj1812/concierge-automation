@@ -2,6 +2,7 @@ import { Types } from "mongoose";
 import { Vendor, VendorModel } from "./vendor.model";
 import { VendorRequest, VendorRequestModel } from "./vendor-request.model";
 import { ServiceType, VendorRequestStatus } from "../../common/types/domain";
+import { attachTenantPayload } from "../../infrastructure/tenancy/attach-tenant-payload";
 
 export class VendorRepository {
   async list(): Promise<Vendor[]> {
@@ -13,7 +14,7 @@ export class VendorRepository {
   }
 
   async create(payload: Vendor): Promise<Vendor> {
-    const document = await VendorModel.create(payload);
+    const document = await VendorModel.create(attachTenantPayload(payload as unknown as Record<string, unknown>));
     return document.toObject();
   }
 

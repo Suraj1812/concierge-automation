@@ -1,10 +1,11 @@
 import { Types } from "mongoose";
 import { Enquiry, EnquiryModel } from "./enquiry.model";
 import { EnquiryStatus } from "../../common/types/domain";
+import { attachTenantPayload } from "../../infrastructure/tenancy/attach-tenant-payload";
 
 export class EnquiryRepository {
   async create(payload: Enquiry): Promise<Enquiry> {
-    const document = await EnquiryModel.create(payload);
+    const document = await EnquiryModel.create(attachTenantPayload(payload as unknown as Record<string, unknown>));
     return document.toObject();
   }
 

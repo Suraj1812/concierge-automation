@@ -1,5 +1,6 @@
 import { HydratedDocument, Schema, Types, model } from "mongoose";
 import { communicationChannels, vendorRequestStatuses } from "../../common/types/domain";
+import { tenantScopedPlugin } from "../../infrastructure/tenancy/tenant-scoped.plugin";
 
 export interface VendorRequest {
   enquiryId: Types.ObjectId;
@@ -39,7 +40,8 @@ const vendorRequestSchema = new Schema<VendorRequest>(
 );
 
 vendorRequestSchema.index({ enquiryId: 1, vendorId: 1 }, { unique: true });
-vendorRequestSchema.index({ vendorReference: 1 }, { unique: true, sparse: true });
+vendorRequestSchema.index({ tenantId: 1, vendorReference: 1 }, { unique: true, sparse: true });
+vendorRequestSchema.plugin(tenantScopedPlugin);
 
 export const VendorRequestModel = model<VendorRequest>("VendorRequest", vendorRequestSchema);
 export type VendorRequestDocument = HydratedDocument<VendorRequest>;

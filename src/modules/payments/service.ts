@@ -12,6 +12,10 @@ import { NotificationService } from "../notifications/service";
 import { CustomerRepository } from "../users/repository";
 import { getEntityId } from "../../common/utils/entity";
 import { addMinutes } from "../../common/utils/date";
+import { recordUsageEvent } from "../usage/recorder";
+import { getCurrentTenantId } from "../../infrastructure/tenancy/tenant-context";
+import { resolveCurrentTenantConfig } from "../tenants/runtime-config";
+import { getTenantIdFromEntity } from "../../common/utils/tenant";
 
 type RazorpayWebhookPayload = {
   event: string;
@@ -52,9 +56,16 @@ export class PaymentService {
 
     const quote = await this.quoteRepository.findById(proposal.recommendedQuoteId.toString());
     const customer = await this.customerRepository.findById(enquiry.customerId.toString());
+    const tenantId = getTenantIdFromEntity(proposal)
+      || getTenantIdFromEntity(enquiry)
+      || getTenantIdFromEntity(customer)
+      || getCurrentTenantId();
 
     if (!quote || !quote.normalizedOffer || !customer) {
       throw new AppError("Payment data incomplete", 422, "PAYMENT_DATA_INCOMPLETE");
+    }
+    if (!customer.phone) {
+      throw new AppError("Customer phone number missing for WhatsApp payment flow", 422, "CUSTOMER_PHONE_MISSING");
     }
 
     const existingPayment = await this.paymentRepository.findLatestByProposal(proposalId);
@@ -67,31 +78,40 @@ export class PaymentService {
       && existingPayment.razorpayOrderId
       && (!existingPayment.expiresAt || existingPayment.expiresAt > new Date());
 
+    const tenantConfig = await resolveCurrentTenantConfig();
+
     if (activeExistingPayment) {
       return {
         paymentId: getEntityId(existingPayment),
         orderId: existingPayment.razorpayOrderId,
         amount: existingPayment.amount,
         currency: existingPayment.currency,
-        keyId: env.RAZORPAY_KEY_ID
+        keyId: tenantConfig.integrations.razorpay.keyId
       };
     }
+    const serviceFee = Math.max(
+      quote.normalizedOffer.totalAmount * (tenantConfig.pricing.serviceFeePercentage / 100),
+      tenantConfig.pricing.minimumServiceFee
+    );
+    const payableAmount = quote.normalizedOffer.totalAmount + serviceFee;
 
     const receipt = `enquiry_${enquiryId}_${Date.now()}`;
     const order = await this.razorpayService.createOrder({
-      amount: Math.round(quote.normalizedOffer.totalAmount * 100),
+      amount: Math.round(payableAmount * 100),
       currency: quote.normalizedOffer.currency,
       receipt,
       notes: {
         enquiryId,
-        proposalId
+        proposalId,
+        baseAmount: String(quote.normalizedOffer.totalAmount),
+        serviceFee: String(serviceFee)
       }
     });
 
     const payment = await this.paymentRepository.create({
       enquiryId: new Types.ObjectId(enquiryId),
       proposalId: new Types.ObjectId(proposalId),
-      amount: quote.normalizedOffer.totalAmount,
+      amount: payableAmount,
       currency: quote.normalizedOffer.currency,
       status: "pending",
       receipt,
@@ -107,6 +127,8 @@ export class PaymentService {
         }
       ],
       webhookEvents: []
+      ,
+      ...(tenantId ? { tenantId } : {})
     });
 
     await this.enquiryRepository.update(enquiryId, {
@@ -117,6 +139,7 @@ export class PaymentService {
     await paymentQueue.add(
       "payment-reminder",
       {
+        tenantId,
         paymentId: getEntityId(payment)
       },
       {
@@ -132,20 +155,21 @@ export class PaymentService {
       body: {
         text: `Your payment link is ready. Order reference: ${order.id}. Please proceed at your convenience, and I’ll continue coordinating everything in the background.`
       },
-      idempotencyKey: `payment-link:${order.id}`
+      idempotencyKey: `payment-link:${order.id}`,
+      tenantId
     });
 
     return {
       paymentId: getEntityId(payment),
       orderId: order.id,
-      amount: quote.normalizedOffer.totalAmount,
+      amount: payableAmount,
       currency: quote.normalizedOffer.currency,
-      keyId: env.RAZORPAY_KEY_ID
+      keyId: tenantConfig.integrations.razorpay.keyId
     };
   }
 
   async handleWebhook(rawBody: Buffer | undefined, signature: string | undefined, payload: RazorpayWebhookPayload): Promise<void> {
-    const isValid = this.razorpayService.verifyWebhookSignature(rawBody, signature);
+    const isValid = await this.razorpayService.verifyWebhookSignature(rawBody, signature);
     if (!isValid) {
       throw new AppError("Invalid Razorpay webhook signature", 403, "INVALID_WEBHOOK_SIGNATURE");
     }
@@ -170,6 +194,7 @@ export class PaymentService {
       }
 
       await this.paymentRepository.appendWebhookEvent(getEntityId(payment), payload.event, eventId, payload as Record<string, unknown>);
+      const tenantId = getTenantIdFromEntity(payment) || getCurrentTenantId();
 
       if (payload.event === "payment.captured") {
         if (payment.status !== "captured") {
@@ -186,12 +211,17 @@ export class PaymentService {
           await bookingLifecycleQueue.add(
             "payment-captured",
             {
+              tenantId,
               paymentId: getEntityId(payment)
             },
             {
               jobId: `payment-captured:${getEntityId(payment)}`
             }
           );
+
+          await recordUsageEvent("payment.captured", 1, {
+            paymentId: getEntityId(payment)
+          });
         }
 
         await this.paymentRepository.markOrderStatus(getEntityId(payment), orderId, "captured");
@@ -209,6 +239,7 @@ export class PaymentService {
         await paymentQueue.add(
           "payment-reminder",
           {
+            tenantId,
             paymentId: getEntityId(payment)
           },
           {
@@ -243,10 +274,15 @@ export class PaymentService {
         await this.paymentRepository.releaseAutomationLock(paymentId);
         return;
       }
+      const tenantId = getTenantIdFromEntity(payment)
+        || getTenantIdFromEntity(enquiry)
+        || getTenantIdFromEntity(customer)
+        || getCurrentTenantId();
 
       const isExpired = payment.expiresAt ? payment.expiresAt <= new Date() : false;
+      const tenantConfig = await resolveCurrentTenantConfig();
 
-      if ((payment.status === "failed" || isExpired) && payment.retryCount < env.MAX_PAYMENT_RETRY_ATTEMPTS) {
+      if ((payment.status === "failed" || isExpired) && payment.retryCount < tenantConfig.automation.paymentRetryLimit) {
         const proposal = payment.proposalId ? await this.proposalRepository.findById(payment.proposalId.toString()) : null;
         const quote = proposal ? await this.quoteRepository.findById(proposal.recommendedQuoteId.toString()) : null;
 
@@ -257,7 +293,7 @@ export class PaymentService {
 
         const newReceipt = `${payment.receipt}-r${payment.retryCount + 1}`;
         const newOrder = await this.razorpayService.createOrder({
-          amount: Math.round(quote.normalizedOffer.totalAmount * 100),
+          amount: Math.round(payment.amount * 100),
           currency: quote.normalizedOffer.currency,
           receipt: newReceipt,
           notes: {
@@ -280,16 +316,20 @@ export class PaymentService {
         await this.notificationService.enqueue({
           type: "payment-retry-link",
           channel: "whatsapp",
-          recipient: customer.phone,
+          recipient: customer.phone || "",
           body: {
             text: `I’ve refreshed your secure payment link for convenience. Your new order reference is ${newOrder.id}. Once completed, I’ll confirm everything immediately.`
           },
-          idempotencyKey: `payment-retry-link:${paymentId}:${newOrder.id}`
+          idempotencyKey: `payment-retry-link:${paymentId}:${newOrder.id}`,
+          tenantId
         });
 
         await paymentQueue.add(
           "payment-reminder",
-          { paymentId },
+          {
+            tenantId,
+            paymentId
+          },
           {
             delay: Math.floor(env.PAYMENT_LINK_EXPIRY_MINUTES / 2) * 60_000,
             jobId: `payment-reminder:${paymentId}:${newOrder.id}`
@@ -299,15 +339,16 @@ export class PaymentService {
         return;
       }
 
-      if ((payment.status === "failed" || isExpired) && payment.retryCount >= env.MAX_PAYMENT_RETRY_ATTEMPTS) {
+      if ((payment.status === "failed" || isExpired) && payment.retryCount >= tenantConfig.automation.paymentRetryLimit) {
         await this.notificationService.enqueue({
           type: "payment-manual-assistance",
           channel: "whatsapp",
-          recipient: customer.phone,
+          recipient: customer.phone || "",
           body: {
             text: "Your payment link has expired a few times, so I recommend a quick manual check-in. Our team can assist immediately to complete the booking smoothly."
           },
-          idempotencyKey: `payment-manual-assistance:${paymentId}`
+          idempotencyKey: `payment-manual-assistance:${paymentId}`,
+          tenantId
         });
         await this.paymentRepository.releaseAutomationLock(paymentId);
         return;
@@ -316,18 +357,22 @@ export class PaymentService {
       await this.notificationService.enqueue({
         type: "payment-reminder",
         channel: "whatsapp",
-        recipient: customer.phone,
+        recipient: customer.phone || "",
         body: {
           text: "A quick reminder that your secure payment link is still active. Once completed, I’ll confirm the booking and coordinate the next steps immediately."
         },
-        idempotencyKey: `payment-reminder:${paymentId}:${Date.now()}`
+        idempotencyKey: `payment-reminder:${paymentId}:${Date.now()}`,
+        tenantId
       });
 
       if (payment.expiresAt) {
         const nextDelay = Math.max(15 * 60_000, Math.floor((payment.expiresAt.getTime() - Date.now()) / 2));
         await paymentQueue.add(
           "payment-reminder",
-          { paymentId },
+          {
+            tenantId,
+            paymentId
+          },
           {
             delay: nextDelay,
             jobId: `payment-reminder:${paymentId}:${Date.now()}`

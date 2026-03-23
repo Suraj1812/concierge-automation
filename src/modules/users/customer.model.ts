@@ -1,4 +1,5 @@
 import { HydratedDocument, Schema, model } from "mongoose";
+import { tenantScopedPlugin } from "../../infrastructure/tenancy/tenant-scoped.plugin";
 
 export interface CustomerPreferences {
   language?: string;
@@ -19,7 +20,7 @@ export interface CustomerMemoryEvent {
 
 export interface Customer {
   name?: string;
-  phone: string;
+  phone?: string;
   whatsappUserId?: string;
   email?: string;
   preferences: CustomerPreferences;
@@ -32,7 +33,7 @@ export interface Customer {
 const customerSchema = new Schema<Customer>(
   {
     name: { type: String, trim: true },
-    phone: { type: String, required: true, unique: true, index: true },
+    phone: { type: String, index: true },
     whatsappUserId: { type: String, index: true },
     email: { type: String, lowercase: true, trim: true },
     preferences: {
@@ -60,6 +61,10 @@ const customerSchema = new Schema<Customer>(
     timestamps: true
   }
 );
+
+customerSchema.plugin(tenantScopedPlugin);
+customerSchema.index({ tenantId: 1, phone: 1 }, { unique: true, sparse: true });
+customerSchema.index({ tenantId: 1, email: 1 }, { unique: true, sparse: true });
 
 export const CustomerModel = model<Customer>("Customer", customerSchema);
 export type CustomerDocument = HydratedDocument<Customer>;

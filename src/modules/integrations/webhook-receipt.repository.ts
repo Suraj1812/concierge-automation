@@ -1,6 +1,12 @@
 import { WebhookReceipt, WebhookReceiptModel } from "./webhook-receipt.model";
+import { getCurrentTenantId } from "../../infrastructure/tenancy/tenant-context";
 
 export class WebhookReceiptRepository {
+  private buildScopedFilter(provider: WebhookReceipt["provider"], externalEventId: string): Record<string, unknown> {
+    const tenantId = getCurrentTenantId();
+    return tenantId ? { tenantId, provider, externalEventId } : { provider, externalEventId };
+  }
+
   async tryStartProcessing(
     provider: WebhookReceipt["provider"],
     externalEventId: string,
@@ -9,9 +15,22 @@ export class WebhookReceiptRepository {
   ): Promise<"acquired" | "duplicate" | "in_progress"> {
     const now = new Date();
     const lockExpiresAt = new Date(now.getTime() + lockTtlMs);
+    const tenantId = getCurrentTenantId();
+    const existing = await WebhookReceiptModel.findOne(this.buildScopedFilter(provider, externalEventId)).lean();
+
+    if (existing) {
+      if (existing.status === "completed") {
+        return "duplicate";
+      }
+
+      if (existing.status === "processing" && existing.lockExpiresAt && existing.lockExpiresAt > now) {
+        return "in_progress";
+      }
+    }
 
     try {
       await WebhookReceiptModel.create({
+        ...(tenantId ? { tenantId } : {}),
         provider,
         externalEventId,
         signature,
@@ -29,7 +48,7 @@ export class WebhookReceiptRepository {
       }
     }
 
-    const current = await WebhookReceiptModel.findOne({ provider, externalEventId }).lean();
+    const current = await WebhookReceiptModel.findOne(this.buildScopedFilter(provider, externalEventId)).lean();
     if (!current) {
       return "in_progress";
     }
@@ -44,8 +63,7 @@ export class WebhookReceiptRepository {
 
     const reclaimed = await WebhookReceiptModel.findOneAndUpdate(
       {
-        provider,
-        externalEventId,
+        ...this.buildScopedFilter(provider, externalEventId),
         $or: [
           { status: "failed" },
           { status: "processing", lockExpiresAt: { $lte: now } }
@@ -71,7 +89,7 @@ export class WebhookReceiptRepository {
 
   async markCompleted(provider: WebhookReceipt["provider"], externalEventId: string, signature?: string): Promise<void> {
     await WebhookReceiptModel.updateOne(
-      { provider, externalEventId },
+      this.buildScopedFilter(provider, externalEventId),
       {
         $set: {
           signature,
@@ -89,7 +107,7 @@ export class WebhookReceiptRepository {
 
   async markFailed(provider: WebhookReceipt["provider"], externalEventId: string, errorMessage: string, signature?: string): Promise<void> {
     await WebhookReceiptModel.updateOne(
-      { provider, externalEventId },
+      this.buildScopedFilter(provider, externalEventId),
       {
         $set: {
           signature,

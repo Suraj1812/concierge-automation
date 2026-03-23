@@ -1,5 +1,6 @@
 import { HydratedDocument, Schema, Types, model } from "mongoose";
 import { quoteStatuses } from "../../common/types/domain";
+import { tenantScopedPlugin } from "../../infrastructure/tenancy/tenant-scoped.plugin";
 
 export interface NormalizedQuote {
   title: string;
@@ -63,6 +64,7 @@ const quoteSchema = new Schema<Quote>(
 );
 
 quoteSchema.index({ enquiryId: 1, vendorId: 1 });
+quoteSchema.plugin(tenantScopedPlugin);
 
 export const QuoteModel = model<Quote>("Quote", quoteSchema);
 export type QuoteDocument = HydratedDocument<Quote>;

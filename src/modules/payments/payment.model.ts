@@ -1,5 +1,6 @@
 import { HydratedDocument, Schema, Types, model } from "mongoose";
 import { paymentStatuses } from "../../common/types/domain";
+import { tenantScopedPlugin } from "../../infrastructure/tenancy/tenant-scoped.plugin";
 
 export interface PaymentWebhookEvent {
   eventId?: string;
@@ -75,6 +76,8 @@ const paymentSchema = new Schema<Payment>(
 );
 
 paymentSchema.index({ enquiryId: 1, createdAt: -1 });
+paymentSchema.plugin(tenantScopedPlugin);
+paymentSchema.index({ tenantId: 1, proposalId: 1, createdAt: -1 });
 
 export const PaymentModel = model<Payment>("Payment", paymentSchema);
 export type PaymentDocument = HydratedDocument<Payment>;

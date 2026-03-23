@@ -1,32 +1,48 @@
 import nodemailer, { Transporter } from "nodemailer";
-import { env } from "../../config/env";
+import { resolveCurrentTenantConfig } from "../tenants/runtime-config";
 
 export class EmailService {
-  private readonly transporter: Transporter | null;
+  private transporterCache = new Map<string, Transporter | null>();
 
-  constructor() {
-    this.transporter = env.SMTP_HOST
+  private async getTransporter(): Promise<Transporter | null> {
+    const tenantConfig = await resolveCurrentTenantConfig();
+    const cacheKey = tenantConfig.tenantId || "default";
+
+    if (this.transporterCache.has(cacheKey)) {
+      return this.transporterCache.get(cacheKey) || null;
+    }
+
+    const transporter = tenantConfig.integrations.email.imapHost
       ? nodemailer.createTransport({
-          host: env.SMTP_HOST,
-          port: env.SMTP_PORT,
-          secure: env.SMTP_SECURE,
-          auth: env.SMTP_USER
+          host: tenantConfig.integrations.email.imapHost,
+          port: tenantConfig.integrations.email.imapPort || 587,
+          secure: false,
+          auth: tenantConfig.integrations.email.imapUsername
             ? {
-                user: env.SMTP_USER,
-                pass: env.SMTP_PASS
+                user: tenantConfig.integrations.email.imapUsername,
+                pass: tenantConfig.integrations.email.imapPassword
               }
             : undefined
         })
       : null;
+
+    this.transporterCache.set(cacheKey, transporter);
+    return transporter;
   }
 
   async sendVendorRequest(to: string, subject: string, text: string): Promise<void> {
-    if (!this.transporter) {
+    await this.sendEmail(to, subject, text);
+  }
+
+  async sendEmail(to: string, subject: string, text: string): Promise<void> {
+    const transporter = await this.getTransporter();
+    const tenantConfig = await resolveCurrentTenantConfig();
+    if (!transporter) {
       return;
     }
 
-    await this.transporter.sendMail({
-      from: env.SMTP_FROM,
+    await transporter.sendMail({
+      from: tenantConfig.integrations.email.fromAddress,
       to,
       subject,
       text

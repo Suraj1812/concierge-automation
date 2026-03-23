@@ -8,6 +8,10 @@ import { AuditService } from "../audit/service";
 import { getEntityId } from "../../common/utils/entity";
 import { customerFollowUpQueue } from "../../infrastructure/queue/queues";
 import { env } from "../../config/env";
+import { recordUsageEvent } from "../usage/recorder";
+import { getCurrentTenantId } from "../../infrastructure/tenancy/tenant-context";
+import { resolveCurrentTenantConfig } from "../tenants/runtime-config";
+import { getTenantIdFromEntity } from "../../common/utils/tenant";
 
 export class ConversationService {
   constructor(
@@ -37,21 +41,25 @@ export class ConversationService {
     if (!conversation || !customer || !enquiry) {
       return;
     }
+    const tenantId = getTenantIdFromEntity(conversation) || getTenantIdFromEntity(customer) || getTenantIdFromEntity(enquiry) || getCurrentTenantId();
 
     const scheduledFrom = new Date(payload.scheduledFrom);
     if ((conversation.lastInboundAt && conversation.lastInboundAt > scheduledFrom) || enquiry.status !== "awaiting_clarification") {
       return;
     }
 
-    await this.notificationService.enqueue({
-      type: "clarification-reminder",
-      channel: "whatsapp",
-      recipient: customer.phone,
-      body: {
-        text: `Just checking in on your ${enquiry.title.toLowerCase()} request. Once you share the remaining details, I can continue curating the best options for you right away.`
-      },
-      idempotencyKey: `clarification-reminder:${payload.conversationId}:${scheduledFrom.toISOString()}`
-    });
+    if (customer.phone) {
+      await this.notificationService.enqueue({
+        type: "clarification-reminder",
+        channel: "whatsapp",
+        recipient: customer.phone,
+        body: {
+          text: `Just checking in on your ${enquiry.title.toLowerCase()} request. Once you share the remaining details, I can continue curating the best options for you right away.`
+        },
+        idempotencyKey: `clarification-reminder:${payload.conversationId}:${scheduledFrom.toISOString()}`,
+        tenantId
+      });
+    }
   }
 
   async processInboundWhatsApp(payload: {
@@ -66,7 +74,11 @@ export class ConversationService {
       name: payload.name,
       whatsappUserId: payload.whatsappUserId
     });
+    await recordUsageEvent("channel.inbound.whatsapp", 1, {
+      messageId: payload.messageId
+    });
     const customerId = getEntityId(customer);
+    const tenantId = getTenantIdFromEntity(customer) || getCurrentTenantId();
 
     let conversation = await this.conversationRepository.findActiveByCustomer(customerId);
     if (!conversation) {
@@ -122,11 +134,12 @@ export class ConversationService {
     await this.notificationService.enqueue({
       type: "concierge-reply",
       channel: "whatsapp",
-      recipient: customer.phone,
+      recipient: customer.phone || payload.phone,
       body: {
         text: aiTurn.replyText
       },
-      idempotencyKey: `reply:${payload.messageId}`
+      idempotencyKey: `reply:${payload.messageId}`,
+      tenantId
     });
 
     await this.conversationRepository.appendMessage(getEntityId(conversation), {
@@ -137,16 +150,18 @@ export class ConversationService {
     });
 
     if (aiTurn.nextAction === "clarify" || aiTurn.missingFields.length > 0) {
+      const tenantConfig = await resolveCurrentTenantConfig();
       await customerFollowUpQueue.add(
         "conversation-clarification-follow-up",
         {
+          tenantId,
           conversationId: getEntityId(conversation),
           customerId,
           enquiryId: getEntityId(enquiry),
           scheduledFrom: new Date().toISOString()
         },
         {
-          delay: env.CUSTOMER_FOLLOW_UP_MINUTES * 60_000,
+          delay: tenantConfig.automation.customerFollowUpMinutes * 60_000,
           jobId: `clarification-follow-up:${getEntityId(conversation)}:${payload.messageId}`
         }
       );

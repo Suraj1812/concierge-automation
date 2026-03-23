@@ -5,6 +5,10 @@ export class CustomerRepository {
     return CustomerModel.findOne({ phone }).lean();
   }
 
+  async findByEmail(email: string): Promise<Customer | null> {
+    return CustomerModel.findOne({ email: email.toLowerCase() }).lean();
+  }
+
   async findById(id: string): Promise<Customer | null> {
     return CustomerModel.findById(id).lean();
   }
@@ -21,6 +25,22 @@ export class CustomerRepository {
       },
       { new: true, upsert: true }
     );
+    return document.toObject();
+  }
+
+  async upsertByEmail(email: string, payload: Partial<Customer>): Promise<Customer> {
+    const document = await CustomerModel.findOneAndUpdate(
+      { email: email.toLowerCase() },
+      {
+        $set: {
+          ...payload,
+          email: email.toLowerCase(),
+          lastSeenAt: new Date()
+        }
+      },
+      { new: true, upsert: true }
+    );
+
     return document.toObject();
   }
 

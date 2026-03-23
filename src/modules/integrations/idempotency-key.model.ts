@@ -1,4 +1,5 @@
 import { HydratedDocument, Schema, model } from "mongoose";
+import { tenantScopedPlugin } from "../../infrastructure/tenancy/tenant-scoped.plugin";
 
 export interface IdempotencyKeyRecord {
   key: string;
@@ -16,7 +17,7 @@ export interface IdempotencyKeyRecord {
 
 const idempotencyKeySchema = new Schema<IdempotencyKeyRecord>(
   {
-    key: { type: String, required: true, unique: true, index: true },
+    key: { type: String, required: true, index: true },
     route: { type: String, required: true },
     method: { type: String, required: true },
     requestHash: { type: String, required: true },
@@ -32,6 +33,9 @@ const idempotencyKeySchema = new Schema<IdempotencyKeyRecord>(
     timestamps: true
   }
 );
+
+idempotencyKeySchema.plugin(tenantScopedPlugin);
+idempotencyKeySchema.index({ tenantId: 1, key: 1 }, { unique: true });
 
 export const IdempotencyKeyModel = model<IdempotencyKeyRecord>("IdempotencyKey", idempotencyKeySchema);
 export type IdempotencyKeyDocument = HydratedDocument<IdempotencyKeyRecord>;

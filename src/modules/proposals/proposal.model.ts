@@ -1,5 +1,6 @@
 import { HydratedDocument, Schema, Types, model } from "mongoose";
 import { proposalStatuses } from "../../common/types/domain";
+import { tenantScopedPlugin } from "../../infrastructure/tenancy/tenant-scoped.plugin";
 
 export interface ProposalOption {
   quoteId: Types.ObjectId;
@@ -43,6 +44,8 @@ const proposalSchema = new Schema<Proposal>(
 );
 
 proposalSchema.index({ enquiryId: 1, version: -1 });
+proposalSchema.plugin(tenantScopedPlugin);
+proposalSchema.index({ tenantId: 1, enquiryId: 1, version: -1 });
 
 export const ProposalModel = model<Proposal>("Proposal", proposalSchema);
 export type ProposalDocument = HydratedDocument<Proposal>;

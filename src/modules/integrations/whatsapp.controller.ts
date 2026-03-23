@@ -28,7 +28,7 @@ export class WhatsAppWebhookController {
   ) {}
 
   verify = async (request: Request, response: Response): Promise<void> => {
-    const challenge = this.whatsAppService.verifyWebhookChallenge(
+    const challenge = await this.whatsAppService.verifyWebhookChallenge(
       request.query["hub.mode"] as string | undefined,
       request.query["hub.verify_token"] as string | undefined,
       request.query["hub.challenge"] as string | undefined
@@ -38,7 +38,7 @@ export class WhatsAppWebhookController {
   };
 
   receive = async (request: Request, response: Response): Promise<void> => {
-    const isValid = this.whatsAppService.verifySignature(
+    const isValid = await this.whatsAppService.verifySignature(
       request.rawBody,
       request.headers["x-hub-signature-256"] as string | undefined
     );
@@ -71,6 +71,7 @@ export class WhatsAppWebhookController {
             await conversationQueue.add(
               "whatsapp-inbound",
               {
+                tenantId: request.tenant?.id,
                 phone: message.from,
                 name: contact?.profile?.name,
                 whatsappUserId: contact?.wa_id,

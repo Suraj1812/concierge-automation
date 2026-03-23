@@ -5,6 +5,7 @@ import { NotificationRepository } from "./repository";
 import { WhatsAppService } from "../integrations/whatsapp.service";
 import { EmailService } from "../integrations/email.service";
 import { getEntityId } from "../../common/utils/entity";
+import { getCurrentTenantId } from "../../infrastructure/tenancy/tenant-context";
 
 export class NotificationService {
   constructor(
@@ -19,6 +20,7 @@ export class NotificationService {
     recipient: string;
     body: Record<string, unknown>;
     idempotencyKey: string;
+    tenantId?: string;
     delayMs?: number;
   }): Promise<void> {
     let notification;
@@ -31,7 +33,8 @@ export class NotificationService {
         status: "pending",
         attempts: 0,
         scheduledAt: payload.delayMs ? new Date(Date.now() + payload.delayMs) : new Date(),
-        idempotencyKey: payload.idempotencyKey
+        idempotencyKey: payload.idempotencyKey,
+        ...(payload.tenantId ? { tenantId: payload.tenantId } : {})
       });
     } catch (error) {
       const duplicateKeyErrorCode = 11000;
@@ -42,12 +45,15 @@ export class NotificationService {
     }
 
     try {
-      await notificationQueue.add(
-        payload.type,
-        { notificationId: getEntityId(notification) },
-        {
-          delay: payload.delayMs,
-          jobId: payload.idempotencyKey
+    await notificationQueue.add(
+      payload.type,
+      {
+        tenantId: payload.tenantId || getCurrentTenantId(),
+        notificationId: getEntityId(notification)
+      },
+      {
+        delay: payload.delayMs,
+        jobId: payload.idempotencyKey
         }
       );
     } catch (error) {
@@ -86,7 +92,7 @@ export class NotificationService {
       }
 
       if (notification.channel === "email") {
-        await this.emailService.sendVendorRequest(
+        await this.emailService.sendEmail(
           notification.recipient,
           (notification.payload.subject as string) || notification.type,
           (notification.payload.text as string) || ""

@@ -15,6 +15,12 @@ export class CustomerService {
     });
   }
 
+  async upsertFromEmail(payload: { email: string; name?: string }): Promise<Customer> {
+    return this.customerRepository.upsertByEmail(payload.email, {
+      name: payload.name
+    });
+  }
+
   async getById(customerId: string): Promise<Customer | null> {
     return this.customerRepository.findById(customerId);
   }

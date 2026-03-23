@@ -1,9 +1,10 @@
 import { Payment, PaymentModel } from "./payment.model";
 import { Types } from "mongoose";
+import { attachTenantPayload } from "../../infrastructure/tenancy/attach-tenant-payload";
 
 export class PaymentRepository {
   async create(payload: Payment): Promise<Payment> {
-    const document = await PaymentModel.create(payload);
+    const document = await PaymentModel.create(attachTenantPayload(payload as unknown as Record<string, unknown>));
     return document.toObject();
   }
 

@@ -1,8 +1,9 @@
 import { Notification, NotificationModel } from "./notification.model";
+import { attachTenantPayload } from "../../infrastructure/tenancy/attach-tenant-payload";
 
 export class NotificationRepository {
   async create(payload: Notification): Promise<Notification> {
-    const document = await NotificationModel.create(payload);
+    const document = await NotificationModel.create(attachTenantPayload(payload as unknown as Record<string, unknown>));
     return document.toObject();
   }
 

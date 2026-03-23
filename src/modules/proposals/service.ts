@@ -15,6 +15,10 @@ import { DecisionEngineService } from "../quotes/decision-engine.service";
 import { getEntityId } from "../../common/utils/entity";
 import { sha256 } from "../../common/utils/crypto";
 import { customerFollowUpQueue } from "../../infrastructure/queue/queues";
+import { recordUsageEvent } from "../usage/recorder";
+import { getCurrentTenantId } from "../../infrastructure/tenancy/tenant-context";
+import { resolveCurrentTenantConfig } from "../tenants/runtime-config";
+import { getTenantIdFromEntity } from "../../common/utils/tenant";
 
 export class ProposalService {
   constructor(
@@ -74,6 +78,7 @@ export class ProposalService {
     if (!customer) {
       throw new AppError("Customer not found", 404, "CUSTOMER_NOT_FOUND");
     }
+    const tenantId = getTenantIdFromEntity(enquiry) || getTenantIdFromEntity(customer) || getCurrentTenantId();
 
     const quotes = await this.quoteRepository.findByEnquiry(enquiryId);
     const vendors = await this.vendorRepository.list();
@@ -101,6 +106,7 @@ export class ProposalService {
 
     const recommended = normalizedQuotes[0];
     const alternatives = normalizedQuotes.slice(1, 3);
+    const tenantConfig = await resolveCurrentTenantConfig();
     const copy = await this.openAIService.generateProposalCopy({
       customerName: customer.name,
       enquiryTitle: enquiry.title,
@@ -124,6 +130,8 @@ export class ProposalService {
     const accessToken = crypto.randomBytes(24).toString("hex");
     const pdfPath = await this.pdfService.generateProposalPdf({
       proposalId: proposalRef,
+      companyName: tenantConfig.proposal.companyName,
+      footerNote: tenantConfig.proposal.footerNote,
       customerName: customer.name,
       enquiryTitle: enquiry.title,
       summary: copy.summary,
@@ -152,7 +160,8 @@ export class ProposalService {
       quoteSignature,
       accessTokenHash: sha256(accessToken),
       status: "sent",
-      version: (latest?.version ?? 0) + 1
+      version: (latest?.version ?? 0) + 1,
+      ...(tenantId ? { tenantId } : {})
     });
 
     await this.enquiryRepository.update(enquiryId, {
@@ -162,38 +171,47 @@ export class ProposalService {
     });
 
     const pdfUrl = this.buildDocumentUrl(getEntityId(proposal), accessToken);
-    await this.notificationService.enqueue({
-      type: "proposal-message",
-      channel: "whatsapp",
-      recipient: customer.phone,
-      body: {
-        text: copy.premiumMessage
-      },
-      idempotencyKey: `proposal-text:${getEntityId(proposal)}`
-    });
+    if (customer.phone) {
+      await this.notificationService.enqueue({
+        type: "proposal-message",
+        channel: "whatsapp",
+        recipient: customer.phone,
+        body: {
+          text: copy.premiumMessage
+        },
+        idempotencyKey: `proposal-text:${getEntityId(proposal)}`,
+        tenantId
+      });
 
-    await this.notificationService.enqueue({
-      type: "proposal-document",
-      channel: "whatsapp",
-      recipient: customer.phone,
-      body: {
-        link: pdfUrl,
-        filename: path.basename(pdfPath),
-        caption: "Your curated concierge proposal"
-      },
-      idempotencyKey: `proposal-doc:${getEntityId(proposal)}`
-    });
+      await this.notificationService.enqueue({
+        type: "proposal-document",
+        channel: "whatsapp",
+        recipient: customer.phone,
+        body: {
+          link: pdfUrl,
+          filename: path.basename(pdfPath),
+          caption: "Your curated concierge proposal"
+        },
+        idempotencyKey: `proposal-doc:${getEntityId(proposal)}`,
+        tenantId
+      });
+    }
 
     await customerFollowUpQueue.add(
       "proposal-review-follow-up",
       {
+        tenantId,
         proposalId: getEntityId(proposal)
       },
       {
-        delay: env.CUSTOMER_FOLLOW_UP_MINUTES * 60_000,
+        delay: tenantConfig.automation.customerFollowUpMinutes * 60_000,
         jobId: `proposal-review-follow-up:${getEntityId(proposal)}`
       }
     );
+
+    await recordUsageEvent("proposal.generated", 1, {
+      enquiryId
+    });
 
     return proposal;
   }
@@ -210,15 +228,19 @@ export class ProposalService {
     if (!enquiry || !customer || !["proposal_sent", "payment_pending"].includes(enquiry.status)) {
       return;
     }
+    const tenantId = getTenantIdFromEntity(proposal) || getTenantIdFromEntity(enquiry) || getTenantIdFromEntity(customer) || getCurrentTenantId();
 
-    await this.notificationService.enqueue({
-      type: "proposal-review-reminder",
-      channel: "whatsapp",
-      recipient: customer.phone,
-      body: {
-        text: "A gentle follow-up on your curated proposal. If you would like, I can walk you through the recommended option or refine the shortlist further before we proceed."
-      },
-      idempotencyKey: `proposal-review-reminder:${proposalId}`
-    });
+    if (customer.phone) {
+      await this.notificationService.enqueue({
+        type: "proposal-review-reminder",
+        channel: "whatsapp",
+        recipient: customer.phone,
+        body: {
+          text: "A gentle follow-up on your curated proposal. If you would like, I can walk you through the recommended option or refine the shortlist further before we proceed."
+        },
+        idempotencyKey: `proposal-review-reminder:${proposalId}`,
+        tenantId
+      });
+    }
   }
 }

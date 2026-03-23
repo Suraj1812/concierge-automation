@@ -70,6 +70,7 @@ const main = async (): Promise<void> => {
     { app },
     { connectDatabase, disconnectDatabase },
     { seedAdminUser },
+    { runWithTenantContext },
     container,
     queues,
     { EnquiryModel },
@@ -83,6 +84,7 @@ const main = async (): Promise<void> => {
     import("../src/app"),
     import("../src/infrastructure/db/mongoose"),
     import("../src/modules/auth/admin-seed"),
+    import("../src/infrastructure/tenancy/tenant-context"),
     import("../src/container"),
     import("../src/infrastructure/queue/queues"),
     import("../src/modules/enquiries/enquiry.model"),
@@ -97,6 +99,19 @@ const main = async (): Promise<void> => {
   const sentDocumentLinks: string[] = [];
   const sentTexts: string[] = [];
   let orderSequence = 0;
+  const runQueuedJob = async (data: { tenantId?: string }, operation: () => Promise<void>): Promise<void> => {
+    if (!data.tenantId) {
+      await operation();
+      return;
+    }
+
+    await runWithTenantContext(
+      {
+        tenantId: data.tenantId
+      },
+      operation
+    );
+  };
 
   container.openAIService.generateConciergeTurn = async () => ({
     replyText: "Absolutely. I’m curating a premium shortlist for you now.",
@@ -171,29 +186,39 @@ const main = async (): Promise<void> => {
   };
 
   (queues.conversationQueue as unknown as { add: typeof queues.conversationQueue.add }).add = async (_name, data) => {
-    await container.conversationService.processInboundWhatsApp(data as never);
+    await runQueuedJob(data as { tenantId?: string }, async () => {
+      await container.conversationService.processInboundWhatsApp(data as never);
+    });
     return {} as never;
   };
 
   (queues.vendorOutreachQueue as unknown as { add: typeof queues.vendorOutreachQueue.add }).add = async (_name, data) => {
-    await container.vendorCommunicationService.sendVendorRequest((data as { vendorRequestId: string }).vendorRequestId);
+    await runQueuedJob(data as { tenantId?: string }, async () => {
+      await container.vendorCommunicationService.sendVendorRequest((data as { vendorRequestId: string }).vendorRequestId);
+    });
     return {} as never;
   };
 
   (queues.vendorFollowUpQueue as unknown as { add: typeof queues.vendorFollowUpQueue.add }).add = async () => ({} as never);
 
   (queues.quoteNormalizationQueue as unknown as { add: typeof queues.quoteNormalizationQueue.add }).add = async (_name, data) => {
-    await container.quoteService.normalizeQuote((data as { quoteId: string }).quoteId);
+    await runQueuedJob(data as { tenantId?: string }, async () => {
+      await container.quoteService.normalizeQuote((data as { quoteId: string }).quoteId);
+    });
     return {} as never;
   };
 
   (queues.proposalGenerationQueue as unknown as { add: typeof queues.proposalGenerationQueue.add }).add = async (_name, data) => {
-    await container.proposalService.generateForEnquiry((data as { enquiryId: string }).enquiryId);
+    await runQueuedJob(data as { tenantId?: string }, async () => {
+      await container.proposalService.generateForEnquiry((data as { enquiryId: string }).enquiryId);
+    });
     return {} as never;
   };
 
   (queues.notificationQueue as unknown as { add: typeof queues.notificationQueue.add }).add = async (_name, data) => {
-    await container.notificationService.process((data as { notificationId: string }).notificationId);
+    await runQueuedJob(data as { tenantId?: string }, async () => {
+      await container.notificationService.process((data as { notificationId: string }).notificationId);
+    });
     return {} as never;
   };
 
@@ -202,7 +227,9 @@ const main = async (): Promise<void> => {
 
   (queues.bookingLifecycleQueue as unknown as { add: typeof queues.bookingLifecycleQueue.add }).add = async (name, data) => {
     if (name === "payment-captured") {
-      await container.bookingService.createOrUpdateFromPayment((data as { paymentId: string }).paymentId);
+      await runQueuedJob(data as { tenantId?: string }, async () => {
+        await container.bookingService.createOrUpdateFromPayment((data as { paymentId: string }).paymentId);
+      });
     }
 
     return {} as never;

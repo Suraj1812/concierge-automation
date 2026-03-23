@@ -1,8 +1,9 @@
 import { Booking, BookingModel } from "./booking.model";
+import { attachTenantPayload } from "../../infrastructure/tenancy/attach-tenant-payload";
 
 export class BookingRepository {
   async create(payload: Booking): Promise<Booking> {
-    const document = await BookingModel.create(payload);
+    const document = await BookingModel.create(attachTenantPayload(payload as unknown as Record<string, unknown>));
     return document.toObject();
   }
 

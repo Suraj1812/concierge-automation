@@ -1,4 +1,5 @@
 import { HydratedDocument, Schema, model } from "mongoose";
+import { tenantScopedPlugin } from "../../infrastructure/tenancy/tenant-scoped.plugin";
 
 export interface AuditLog {
   actorType: "admin" | "customer" | "system" | "vendor";
@@ -28,6 +29,8 @@ const auditLogSchema = new Schema<AuditLog>(
     timestamps: true
   }
 );
+
+auditLogSchema.plugin(tenantScopedPlugin);
 
 export const AuditLogModel = model<AuditLog>("AuditLog", auditLogSchema);
 export type AuditLogDocument = HydratedDocument<AuditLog>;

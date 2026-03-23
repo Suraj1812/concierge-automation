@@ -6,6 +6,8 @@ import { Quote, QuoteModel } from "./quote.model";
 import { QuoteRepository } from "./repository";
 import { DecisionEngineService } from "./decision-engine.service";
 import { getEntityId } from "../../common/utils/entity";
+import { getCurrentTenantId } from "../../infrastructure/tenancy/tenant-context";
+import { getTenantIdFromEntity } from "../../common/utils/tenant";
 
 export class QuoteService {
   constructor(
@@ -18,11 +20,13 @@ export class QuoteService {
 
   async create(payload: Quote): Promise<Quote> {
     const quote = await this.quoteRepository.create(payload);
+    const tenantId = getTenantIdFromEntity(quote) || getCurrentTenantId();
 
     await this.vendorRepository.markVendorResponded(payload.enquiryId.toString(), payload.vendorId.toString(), payload.rawPayload);
     await quoteNormalizationQueue.add(
       "quote-normalization",
       {
+        tenantId,
         quoteId: getEntityId(quote)
       },
       {
@@ -48,6 +52,7 @@ export class QuoteService {
     if (!enquiry) {
       return;
     }
+    const tenantId = getTenantIdFromEntity(quote) || getTenantIdFromEntity(enquiry) || getCurrentTenantId();
 
     const normalized = await this.openAIService.normalizeQuote({
       enquirySummary: enquiry.summary,
@@ -78,6 +83,7 @@ export class QuoteService {
       await proposalGenerationQueue.add(
         "proposal-generation",
         {
+          tenantId,
           enquiryId: quote.enquiryId.toString()
         },
         {

@@ -1,9 +1,9 @@
 import { Request, Response } from "express";
-import { env } from "../../config/env";
 import { createHmacSha256, safeEqual, sha256 } from "../../common/utils/crypto";
 import { AppError } from "../../common/errors/AppError";
 import { WebhookReceiptRepository } from "../integrations/webhook-receipt.repository";
 import { VendorResponseService } from "./vendor-response.service";
+import { resolveCurrentTenantConfig } from "../tenants/runtime-config";
 
 export class VendorResponseController {
   constructor(
@@ -11,18 +11,19 @@ export class VendorResponseController {
     private readonly webhookReceiptRepository: WebhookReceiptRepository
   ) {}
 
-  private verifySignature(rawBody: Buffer | undefined, signatureHeader?: string): boolean {
+  private async verifySignature(rawBody: Buffer | undefined, signatureHeader?: string): Promise<boolean> {
     if (!rawBody || !signatureHeader) {
       return false;
     }
 
+    const tenantConfig = await resolveCurrentTenantConfig();
     const incoming = signatureHeader.replace("sha256=", "");
-    const expected = createHmacSha256(env.VENDOR_WEBHOOK_SECRET, rawBody);
+    const expected = createHmacSha256(tenantConfig.integrations.vendorAutomation.inboundWebhookSecret || "", rawBody);
     return safeEqual(incoming, expected);
   }
 
   receiveWebhook = async (request: Request, response: Response): Promise<void> => {
-    const isValid = this.verifySignature(request.rawBody, request.headers["x-vendor-signature"] as string | undefined);
+    const isValid = await this.verifySignature(request.rawBody, request.headers["x-vendor-signature"] as string | undefined);
     if (!isValid) {
       throw new AppError("Invalid vendor webhook signature", 403, "INVALID_VENDOR_SIGNATURE");
     }

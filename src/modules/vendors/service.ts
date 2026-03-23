@@ -7,6 +7,8 @@ import { vendorOutreachQueue } from "../../infrastructure/queue/queues";
 import { addMinutes } from "../../common/utils/date";
 import { env } from "../../config/env";
 import { getEntityId } from "../../common/utils/entity";
+import { getCurrentTenantId } from "../../infrastructure/tenancy/tenant-context";
+import { getTenantIdFromEntity } from "../../common/utils/tenant";
 
 export class VendorService {
   constructor(
@@ -42,6 +44,7 @@ export class VendorService {
   }
 
   async matchAndDispatch(enquiry: Enquiry): Promise<Vendor[]> {
+    const tenantId = getTenantIdFromEntity(enquiry) || getCurrentTenantId();
     const matched = await this.vendorRepository.matchVendors(enquiry.serviceType, enquiry.requirements.destination);
     const ranked = matched
       .map((vendor) => ({
@@ -66,7 +69,10 @@ export class VendorService {
 
       await vendorOutreachQueue.add(
         "vendor-outreach",
-        { vendorRequestId: getEntityId(vendorRequest) },
+        {
+          tenantId,
+          vendorRequestId: getEntityId(vendorRequest)
+        },
         {
           jobId: `vendor-outreach:${getEntityId(enquiry)}:${getEntityId(vendor)}`
         }

@@ -1,5 +1,6 @@
 import { HydratedDocument, Schema, model } from "mongoose";
 import { communicationChannels, notificationStatuses } from "../../common/types/domain";
+import { tenantScopedPlugin } from "../../infrastructure/tenancy/tenant-scoped.plugin";
 
 export interface Notification {
   type: string;
@@ -29,12 +30,15 @@ const notificationSchema = new Schema<Notification>(
     sentAt: { type: Date },
     processingStartedAt: { type: Date },
     lockExpiresAt: { type: Date, index: true },
-    idempotencyKey: { type: String, required: true, unique: true, index: true }
+    idempotencyKey: { type: String, required: true, index: true }
   },
   {
     timestamps: true
   }
 );
+
+notificationSchema.plugin(tenantScopedPlugin);
+notificationSchema.index({ tenantId: 1, idempotencyKey: 1 }, { unique: true });
 
 export const NotificationModel = model<Notification>("Notification", notificationSchema);
 export type NotificationDocument = HydratedDocument<Notification>;

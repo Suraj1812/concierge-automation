@@ -1,4 +1,5 @@
 import { HydratedDocument, Schema, model } from "mongoose";
+import { tenantScopedPlugin } from "../../infrastructure/tenancy/tenant-scoped.plugin";
 
 export interface WebhookReceipt {
   provider: "whatsapp" | "razorpay" | "vendor";
@@ -29,7 +30,8 @@ const webhookReceiptSchema = new Schema<WebhookReceipt>(
   }
 );
 
-webhookReceiptSchema.index({ provider: 1, externalEventId: 1 }, { unique: true });
+webhookReceiptSchema.plugin(tenantScopedPlugin);
+webhookReceiptSchema.index({ tenantId: 1, provider: 1, externalEventId: 1 }, { unique: true });
 
 export const WebhookReceiptModel = model<WebhookReceipt>("WebhookReceipt", webhookReceiptSchema);
 export type WebhookReceiptDocument = HydratedDocument<WebhookReceipt>;

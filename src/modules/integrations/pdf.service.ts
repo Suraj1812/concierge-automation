@@ -13,6 +13,8 @@ export class PdfService {
 
   async generateProposalPdf(payload: {
     proposalId: string;
+    companyName?: string;
+    footerNote?: string;
     customerName?: string;
     enquiryTitle: string;
     summary: string;
@@ -40,7 +42,7 @@ export class PdfService {
       const stream = fs.createWriteStream(filePath);
 
       document.pipe(stream);
-      document.fontSize(24).text("Luxury Concierge Proposal", { align: "center" });
+      document.fontSize(24).text(`${payload.companyName || "Luxury Concierge"} Proposal`, { align: "center" });
       document.moveDown();
       document.fontSize(12).text(`Prepared for: ${payload.customerName || "Valued Guest"}`);
       document.text(`Proposal reference: ${payload.proposalId}`);
@@ -63,6 +65,10 @@ export class PdfService {
         });
         document.moveDown(0.5);
       });
+      if (payload.footerNote) {
+        document.moveDown();
+        document.fontSize(10).text(payload.footerNote, { align: "center" });
+      }
       document.end();
 
       stream.on("finish", () => resolve());
