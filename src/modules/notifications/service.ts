@@ -1,0 +1,92 @@
+import { AppError } from "../../common/errors/AppError";
+import { notificationQueue } from "../../infrastructure/queue/queues";
+import { Notification } from "./notification.model";
+import { NotificationRepository } from "./repository";
+import { WhatsAppService } from "../integrations/whatsapp.service";
+import { EmailService } from "../integrations/email.service";
+import { getEntityId } from "../../common/utils/entity";
+
+export class NotificationService {
+  constructor(
+    private readonly notificationRepository: NotificationRepository,
+    private readonly whatsAppService: WhatsAppService,
+    private readonly emailService: EmailService
+  ) {}
+
+  async enqueue(payload: {
+    type: string;
+    channel: Notification["channel"];
+    recipient: string;
+    body: Record<string, unknown>;
+    idempotencyKey: string;
+    delayMs?: number;
+  }): Promise<void> {
+    let notification;
+    try {
+      notification = await this.notificationRepository.create({
+        type: payload.type,
+        channel: payload.channel,
+        recipient: payload.recipient,
+        payload: payload.body,
+        status: "pending",
+        attempts: 0,
+        scheduledAt: payload.delayMs ? new Date(Date.now() + payload.delayMs) : new Date(),
+        idempotencyKey: payload.idempotencyKey
+      });
+    } catch (error) {
+      const duplicateKeyErrorCode = 11000;
+      if ((error as { code?: number }).code === duplicateKeyErrorCode) {
+        return;
+      }
+      throw error;
+    }
+
+    await notificationQueue.add(
+      payload.type,
+      { notificationId: getEntityId(notification) },
+      {
+        delay: payload.delayMs,
+        jobId: payload.idempotencyKey
+      }
+    );
+  }
+
+  async process(notificationId: string): Promise<void> {
+    const notification = await this.notificationRepository.findById(notificationId);
+
+    if (!notification) {
+      throw new AppError("Notification not found", 404, "NOTIFICATION_NOT_FOUND");
+    }
+
+    try {
+      if (notification.channel === "whatsapp") {
+        const link = notification.payload.link as string | undefined;
+        const text = notification.payload.text as string | undefined;
+
+        if (link) {
+          await this.whatsAppService.sendDocumentMessage(
+            notification.recipient,
+            link,
+            (notification.payload.filename as string) || "proposal.pdf",
+            (notification.payload.caption as string) || ""
+          );
+        } else if (text) {
+          await this.whatsAppService.sendTextMessage(notification.recipient, text);
+        }
+      }
+
+      if (notification.channel === "email") {
+        await this.emailService.sendVendorRequest(
+          notification.recipient,
+          (notification.payload.subject as string) || notification.type,
+          (notification.payload.text as string) || ""
+        );
+      }
+
+      await this.notificationRepository.markSent(notificationId);
+    } catch (error) {
+      await this.notificationRepository.markFailed(notificationId, (error as Error).message);
+      throw error;
+    }
+  }
+}
