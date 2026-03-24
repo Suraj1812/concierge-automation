@@ -15,11 +15,14 @@ Production-grade, SaaS-ready AI concierge backend for luxury concierge operation
 
 ## Quick Start
 
-1. Copy `.env.example` to `.env` and fill in real credentials.
-2. Start infrastructure with `docker-compose up mongo redis`.
-3. Install dependencies with `npm install`.
-4. Run the API with `npm run dev`.
-5. Run workers with `npm run dev:worker`.
+1. Install dependencies with `npm install`.
+2. Copy `.env.example` to `.env`.
+3. Start Docker Desktop or another Docker daemon, or use local MongoDB and Redis instead.
+4. Start infrastructure with `docker compose up -d mongo redis`.
+5. Run the API with `npm run dev`.
+6. Run workers with `npm run dev:worker`.
+
+The example env is bootable for local development. Replace `JWT_SECRET` and `OPENAI_API_KEY` with real values before production.
 
 ## Verification
 
