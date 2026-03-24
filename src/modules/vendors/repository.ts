@@ -13,6 +13,13 @@ export class VendorRepository {
     return VendorModel.findById(id).lean();
   }
 
+  async findByIds(ids: string[]): Promise<Vendor[]> {
+    const objectIds = ids.map((id) => new Types.ObjectId(id));
+    return VendorModel.find({
+      _id: { $in: objectIds }
+    }).lean();
+  }
+
   async create(payload: Vendor): Promise<Vendor> {
     const document = await VendorModel.create(attachTenantPayload(payload as unknown as Record<string, unknown>));
     return document.toObject();

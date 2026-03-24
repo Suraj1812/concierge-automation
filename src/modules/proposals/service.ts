@@ -74,14 +74,24 @@ export class ProposalService {
       return null;
     }
 
-    const customer = await this.customerRepository.findById(enquiry.customerId.toString());
+    const [customer, quotes, openVendorRequests, latest] = await Promise.all([
+      this.customerRepository.findById(enquiry.customerId.toString()),
+      this.quoteRepository.findByEnquiry(enquiryId),
+      this.vendorRepository.findOpenVendorRequestsByEnquiry(enquiryId),
+      this.proposalRepository.findLatestByEnquiry(enquiryId)
+    ]);
+
     if (!customer) {
       throw new AppError("Customer not found", 404, "CUSTOMER_NOT_FOUND");
     }
     const tenantId = getTenantIdFromEntity(enquiry) || getTenantIdFromEntity(customer) || getCurrentTenantId();
 
-    const quotes = await this.quoteRepository.findByEnquiry(enquiryId);
-    const vendors = await this.vendorRepository.list();
+    if (openVendorRequests.length > 0) {
+      return null;
+    }
+
+    const vendorIds = Array.from(new Set(quotes.map((quote) => quote.vendorId.toString())));
+    const vendors = vendorIds.length > 0 ? await this.vendorRepository.findByIds(vendorIds) : [];
     const ranked = this.decisionEngineService.rankQuotes(enquiry, quotes, vendors);
     const normalizedQuotes = ranked.filter((quote) => Boolean(quote.normalizedOffer));
 
@@ -89,13 +99,7 @@ export class ProposalService {
       return null;
     }
 
-    const openVendorRequests = await this.vendorRepository.findOpenVendorRequestsByEnquiry(enquiryId);
-    if (openVendorRequests.length > 0) {
-      return null;
-    }
-
     const quoteSignature = this.buildQuoteSignature(normalizedQuotes.map((quote) => getEntityId(quote)).sort());
-    const latest = await this.proposalRepository.findLatestByEnquiry(enquiryId);
     if (latest?.quoteSignature === quoteSignature) {
       return latest;
     }
@@ -164,54 +168,57 @@ export class ProposalService {
       ...(tenantId ? { tenantId } : {})
     });
 
-    await this.enquiryRepository.update(enquiryId, {
-      proposalId: new Types.ObjectId(getEntityId(proposal)),
-      selectedQuoteId: new Types.ObjectId(getEntityId(recommended)),
-      status: "proposal_sent"
-    });
-
     const pdfUrl = this.buildDocumentUrl(getEntityId(proposal), accessToken);
-    if (customer.phone) {
-      await this.notificationService.enqueue({
-        type: "proposal-message",
-        channel: "whatsapp",
-        recipient: customer.phone,
-        body: {
-          text: copy.premiumMessage
+    const postProposalTasks: Array<Promise<unknown>> = [
+      this.enquiryRepository.update(enquiryId, {
+        proposalId: new Types.ObjectId(getEntityId(proposal)),
+        selectedQuoteId: new Types.ObjectId(getEntityId(recommended)),
+        status: "proposal_sent"
+      }),
+      customerFollowUpQueue.add(
+        "proposal-review-follow-up",
+        {
+          tenantId,
+          proposalId: getEntityId(proposal)
         },
-        idempotencyKey: `proposal-text:${getEntityId(proposal)}`,
-        tenantId
-      });
+        {
+          delay: tenantConfig.automation.customerFollowUpMinutes * 60_000,
+          jobId: `proposal-review-follow-up:${getEntityId(proposal)}`
+        }
+      ),
+      recordUsageEvent("proposal.generated", 1, {
+        enquiryId
+      })
+    ];
 
-      await this.notificationService.enqueue({
-        type: "proposal-document",
-        channel: "whatsapp",
-        recipient: customer.phone,
-        body: {
-          link: pdfUrl,
-          filename: path.basename(pdfPath),
-          caption: "Your curated concierge proposal"
-        },
-        idempotencyKey: `proposal-doc:${getEntityId(proposal)}`,
-        tenantId
-      });
+    if (customer.phone) {
+      postProposalTasks.push(
+        this.notificationService.enqueue({
+          type: "proposal-message",
+          channel: "whatsapp",
+          recipient: customer.phone,
+          body: {
+            text: copy.premiumMessage
+          },
+          idempotencyKey: `proposal-text:${getEntityId(proposal)}`,
+          tenantId
+        }),
+        this.notificationService.enqueue({
+          type: "proposal-document",
+          channel: "whatsapp",
+          recipient: customer.phone,
+          body: {
+            link: pdfUrl,
+            filename: path.basename(pdfPath),
+            caption: "Your curated concierge proposal"
+          },
+          idempotencyKey: `proposal-doc:${getEntityId(proposal)}`,
+          tenantId
+        })
+      );
     }
 
-    await customerFollowUpQueue.add(
-      "proposal-review-follow-up",
-      {
-        tenantId,
-        proposalId: getEntityId(proposal)
-      },
-      {
-        delay: tenantConfig.automation.customerFollowUpMinutes * 60_000,
-        jobId: `proposal-review-follow-up:${getEntityId(proposal)}`
-      }
-    );
-
-    await recordUsageEvent("proposal.generated", 1, {
-      enquiryId
-    });
+    await Promise.all(postProposalTasks);
 
     return proposal;
   }

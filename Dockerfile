@@ -15,4 +15,4 @@ COPY --from=base /app/dist ./dist
 COPY .env.example ./.env.example
 RUN mkdir -p storage/proposals logs
 EXPOSE 4000
-CMD ["node", "dist/server.js"]
+CMD ["node", "dist/src/server.js"]

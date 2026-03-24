@@ -37,12 +37,18 @@ export class DecisionEngineService {
 
   rankQuotes(enquiry: Enquiry, quotes: Quote[], vendors: Vendor[]): Array<Quote & { scoreBreakdown: QuoteScoreBreakdown }> {
     const normalizedQuotes = quotes.filter((quote) => quote.normalizedOffer?.totalAmount);
+    const vendorById = new Map(
+      vendors.map((vendor) => [
+        String((vendor as unknown as { _id?: unknown; id?: string })._id || (vendor as unknown as { id?: string }).id),
+        vendor
+      ])
+    );
     const minAmount = Math.min(...normalizedQuotes.map((quote) => quote.normalizedOffer?.totalAmount ?? 0));
     const maxAmount = Math.max(...normalizedQuotes.map((quote) => quote.normalizedOffer?.totalAmount ?? 0));
 
     return normalizedQuotes
       .map((quote) => {
-        const vendor = vendors.find((item) => (item as unknown as { _id: { toString(): string } })._id.toString() === quote.vendorId.toString());
+        const vendor = vendorById.get(quote.vendorId.toString());
         const priceScore = this.computePriceScore(quote.normalizedOffer?.totalAmount ?? maxAmount, minAmount, maxAmount);
         const fitScore = this.computeFitScore(quote, enquiry);
         const vendorReliabilityScore = this.computeVendorReliability(vendor);

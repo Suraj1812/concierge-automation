@@ -3,16 +3,16 @@
   "version": "1.0.0",
   "description": "Production-grade AI concierge system for WhatsApp-driven luxury service automation.",
   "private": true,
-  "main": "dist/server.js",
+  "main": "dist/src/server.js",
   "scripts": {
-    "dev": "tsx watch src/server.ts",
-    "dev:worker": "tsx watch src/worker.ts",
+    "dev": "node scripts/dev-runner.mjs src/server",
+    "dev:worker": "node scripts/dev-runner.mjs src/worker",
     "build": "tsc -p tsconfig.json",
-    "start": "node dist/server.js",
-    "start:worker": "node dist/worker.js",
+    "start": "node dist/src/server.js",
+    "start:worker": "node dist/src/worker.js",
     "lint": "tsc --noEmit -p tsconfig.json",
-    "test:smoke": "node --import tsx tests/e2e-smoke.ts",
-    "test:hardening": "node --import tsx tests/hardening.integration.ts"
+    "test:smoke": "npm run build && node dist/tests/e2e-smoke.js",
+    "test:hardening": "npm run build && node dist/tests/hardening.integration.js"
   },
   "engines": {
     "node": ">=20.11.0"
@@ -47,7 +47,6 @@
     "@types/pdfkit": "^0.13.7",
     "@types/uuid": "^10.0.0",
     "mongodb-memory-server": "^11.0.1",
-    "tsx": "^4.19.2",
     "typescript": "^5.7.2"
   }
 }

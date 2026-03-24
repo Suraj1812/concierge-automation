@@ -1,8 +1,11 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import type { ResolvedTenantConfig } from "../../modules/tenants/runtime-config";
 
 export type TenantExecutionContext = {
   tenantId: string;
   tenantSlug?: string;
+  tenantName?: string;
+  tenantConfig?: ResolvedTenantConfig;
 };
 
 const storage = new AsyncLocalStorage<TenantExecutionContext>();

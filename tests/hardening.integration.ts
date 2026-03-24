@@ -24,7 +24,18 @@ const waitFor = async <T>(factory: () => Promise<T>, predicate: (value: T) => bo
 };
 
 const main = async (): Promise<void> => {
-  const mongo = await MongoMemoryServer.create();
+  const mongoBinaryDir = "/tmp/mongodb-memory-server-binaries";
+  process.env.MONGOMS_DOWNLOAD_DIR = mongoBinaryDir;
+  const mongo = new MongoMemoryServer({
+    binary: {
+      downloadDir: mongoBinaryDir
+    },
+    instance: {
+      ip: "127.0.0.1",
+      port: 27118
+    }
+  });
+  await mongo.start(true);
   const port = 4012;
 
   process.env.NODE_ENV = "test";
@@ -99,6 +110,7 @@ const main = async (): Promise<void> => {
   const sentDocumentLinks: string[] = [];
   const sentTexts: string[] = [];
   let orderSequence = 0;
+  type CreatedOrder = Awaited<ReturnType<typeof container.razorpayService.createOrder>>;
   const runQueuedJob = async (data: { tenantId?: string }, operation: () => Promise<void>): Promise<void> => {
     if (!data.tenantId) {
       await operation();
@@ -167,7 +179,9 @@ const main = async (): Promise<void> => {
 
   container.emailService.sendVendorRequest = async () => undefined;
 
-  container.razorpayService.createOrder = async ({ receipt }) => {
+  container.razorpayService.createOrder = async (
+    { receipt }: Parameters<typeof container.razorpayService.createOrder>[0]
+  ): Promise<CreatedOrder> => {
     orderSequence += 1;
     return {
       id: `order_${orderSequence}`,
@@ -181,18 +195,20 @@ const main = async (): Promise<void> => {
       status: "created",
       attempts: 0,
       notes: {},
-      created_at: Math.floor(Date.now() / 1000)
+      created_at: Math.floor(Date.now() / 1000),
+      description: "Hardening test concierge order",
+      token: {} as CreatedOrder["token"]
     };
   };
 
-  (queues.conversationQueue as unknown as { add: typeof queues.conversationQueue.add }).add = async (_name, data) => {
+  (queues.conversationQueue as unknown as { add: typeof queues.conversationQueue.add }).add = async (_name: string, data: unknown) => {
     await runQueuedJob(data as { tenantId?: string }, async () => {
       await container.conversationService.processInboundWhatsApp(data as never);
     });
     return {} as never;
   };
 
-  (queues.vendorOutreachQueue as unknown as { add: typeof queues.vendorOutreachQueue.add }).add = async (_name, data) => {
+  (queues.vendorOutreachQueue as unknown as { add: typeof queues.vendorOutreachQueue.add }).add = async (_name: string, data: unknown) => {
     await runQueuedJob(data as { tenantId?: string }, async () => {
       await container.vendorCommunicationService.sendVendorRequest((data as { vendorRequestId: string }).vendorRequestId);
     });
@@ -201,21 +217,21 @@ const main = async (): Promise<void> => {
 
   (queues.vendorFollowUpQueue as unknown as { add: typeof queues.vendorFollowUpQueue.add }).add = async () => ({} as never);
 
-  (queues.quoteNormalizationQueue as unknown as { add: typeof queues.quoteNormalizationQueue.add }).add = async (_name, data) => {
+  (queues.quoteNormalizationQueue as unknown as { add: typeof queues.quoteNormalizationQueue.add }).add = async (_name: string, data: unknown) => {
     await runQueuedJob(data as { tenantId?: string }, async () => {
       await container.quoteService.normalizeQuote((data as { quoteId: string }).quoteId);
     });
     return {} as never;
   };
 
-  (queues.proposalGenerationQueue as unknown as { add: typeof queues.proposalGenerationQueue.add }).add = async (_name, data) => {
+  (queues.proposalGenerationQueue as unknown as { add: typeof queues.proposalGenerationQueue.add }).add = async (_name: string, data: unknown) => {
     await runQueuedJob(data as { tenantId?: string }, async () => {
       await container.proposalService.generateForEnquiry((data as { enquiryId: string }).enquiryId);
     });
     return {} as never;
   };
 
-  (queues.notificationQueue as unknown as { add: typeof queues.notificationQueue.add }).add = async (_name, data) => {
+  (queues.notificationQueue as unknown as { add: typeof queues.notificationQueue.add }).add = async (_name: string, data: unknown) => {
     await runQueuedJob(data as { tenantId?: string }, async () => {
       await container.notificationService.process((data as { notificationId: string }).notificationId);
     });
@@ -225,7 +241,7 @@ const main = async (): Promise<void> => {
   (queues.paymentQueue as unknown as { add: typeof queues.paymentQueue.add }).add = async () => ({} as never);
   (queues.customerFollowUpQueue as unknown as { add: typeof queues.customerFollowUpQueue.add }).add = async () => ({} as never);
 
-  (queues.bookingLifecycleQueue as unknown as { add: typeof queues.bookingLifecycleQueue.add }).add = async (name, data) => {
+  (queues.bookingLifecycleQueue as unknown as { add: typeof queues.bookingLifecycleQueue.add }).add = async (name: string, data: unknown) => {
     if (name === "payment-captured") {
       await runQueuedJob(data as { tenantId?: string }, async () => {
         await container.bookingService.createOrUpdateFromPayment((data as { paymentId: string }).paymentId);
@@ -238,7 +254,7 @@ const main = async (): Promise<void> => {
   await connectDatabase();
   await seedAdminUser();
 
-  const server = app.listen(port);
+  const server = app.listen(port, "127.0.0.1");
   const baseUrl = `http://127.0.0.1:${port}`;
 
   const request = async (path: string, init?: RequestInit) => {

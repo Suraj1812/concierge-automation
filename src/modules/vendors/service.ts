@@ -59,7 +59,7 @@ export class VendorService {
       status: "awaiting_vendor_quotes"
     });
 
-    for (const { vendor } of ranked) {
+    await Promise.all(ranked.map(async ({ vendor }) => {
       const vendorRequest = await this.vendorRepository.createOrUpdateVendorRequest({
         enquiryId: getEntityId(enquiry),
         vendorId: getEntityId(vendor),
@@ -77,7 +77,7 @@ export class VendorService {
           jobId: `vendor-outreach:${getEntityId(enquiry)}:${getEntityId(vendor)}`
         }
       );
-    }
+    }));
 
     return ranked.map(({ vendor }) => vendor);
   }

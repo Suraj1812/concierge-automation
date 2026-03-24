@@ -30,5 +30,5 @@ Production-grade, SaaS-ready AI concierge backend for luxury concierge operation
 
 ## Docs
 
-- Full system design: [docs/system-design.md](/Users/surajsingh/Documents/New%20project/docs/system-design.md)
-- SaaS platform design: [docs/saas-platform.md](/Users/surajsingh/Documents/New%20project/docs/saas-platform.md)
+- Full system design: `docs/system-design.md`
+- SaaS platform design: `docs/saas-platform.md`

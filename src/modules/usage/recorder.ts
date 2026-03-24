@@ -1,5 +1,6 @@
 import { UsageEventModel } from "./usage-event.model";
 import { getCurrentTenantId } from "../../infrastructure/tenancy/tenant-context";
+import { logger } from "../../infrastructure/logging/logger";
 
 export const recordUsageEvent = async (
   metric: string,
@@ -11,10 +12,16 @@ export const recordUsageEvent = async (
     return;
   }
 
-  await UsageEventModel.create({
+  void UsageEventModel.create({
     tenantId,
     metric,
     quantity,
     metadata
+  }).catch((error: Error) => {
+    logger.warn("Failed to record usage event", {
+      tenantId,
+      metric,
+      error
+    });
   });
 };

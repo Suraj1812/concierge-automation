@@ -6,7 +6,7 @@ import { sha256 } from "../common/utils/crypto";
 
 const repository = new IdempotencyKeyRepository();
 
-export const idempotencyMiddleware = async (request: Request, response: Response, next: NextFunction): Promise<void> => {
+const idempotencyMiddlewareHandler = async (request: Request, response: Response, next: NextFunction): Promise<void> => {
   const key = request.headers["idempotency-key"] as string | undefined;
 
   if (!key) {
@@ -18,7 +18,7 @@ export const idempotencyMiddleware = async (request: Request, response: Response
     method: request.method,
     route: request.originalUrl,
     body: request.body
-    }));
+  }));
 
   const started = await repository.startProcessing({
     key,
@@ -75,4 +75,8 @@ export const idempotencyMiddleware = async (request: Request, response: Response
   }) as Response["json"];
 
   next();
+};
+
+export const idempotencyMiddleware = (request: Request, response: Response, next: NextFunction): void => {
+  void idempotencyMiddlewareHandler(request, response, next).catch(next);
 };

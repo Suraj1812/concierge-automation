@@ -74,13 +74,20 @@ export class ConversationService {
       name: payload.name,
       whatsappUserId: payload.whatsappUserId
     });
-    await recordUsageEvent("channel.inbound.whatsapp", 1, {
+
+    void recordUsageEvent("channel.inbound.whatsapp", 1, {
       messageId: payload.messageId
     });
+
     const customerId = getEntityId(customer);
     const tenantId = getTenantIdFromEntity(customer) || getCurrentTenantId();
 
-    let conversation = await this.conversationRepository.findActiveByCustomer(customerId);
+    const [existingConversation, latestEnquiry] = await Promise.all([
+      this.conversationRepository.findActiveByCustomer(customerId),
+      this.enquiryService.getLatestActiveByCustomer(customerId)
+    ]);
+
+    let conversation = existingConversation;
     if (!conversation) {
       conversation = await this.conversationRepository.create(customerId);
     }
@@ -93,7 +100,6 @@ export class ConversationService {
       sentAt: new Date()
     });
 
-    const latestEnquiry = await this.enquiryService.getLatestActiveByCustomer(customerId);
     const history = [...(conversation.history ?? []), { role: "customer", text: payload.text, direction: "inbound", sentAt: new Date() }]
       .slice(-10)
       .map((item) => ({ role: item.role, text: item.text }));
@@ -116,38 +122,42 @@ export class ConversationService {
     });
     const enquiry = enquiryUpdate.enquiry;
 
-    if (!conversation.enquiryId || conversation.enquiryId.toString() !== getEntityId(enquiry)) {
-      await this.conversationRepository.attachEnquiry(getEntityId(conversation), getEntityId(enquiry));
-    }
+    const persistenceTasks: Array<Promise<unknown>> = [
+      this.conversationRepository.updateState(
+        getEntityId(conversation),
+        aiTurn.nextState,
+        aiTurn.missingFields,
+        aiTurn.summary
+      ),
+      this.notificationService.enqueue({
+        type: "concierge-reply",
+        channel: "whatsapp",
+        recipient: customer.phone || payload.phone,
+        body: {
+          text: aiTurn.replyText
+        },
+        idempotencyKey: `reply:${payload.messageId}`,
+        tenantId
+      }),
+      this.conversationRepository.appendMessage(getEntityId(conversation), {
+        direction: "outbound",
+        role: "assistant",
+        text: aiTurn.replyText,
+        sentAt: new Date()
+      })
+    ];
 
-    await this.conversationRepository.updateState(
-      getEntityId(conversation),
-      aiTurn.nextState,
-      aiTurn.missingFields,
-      aiTurn.summary
-    );
+    if (!conversation.enquiryId || conversation.enquiryId.toString() !== getEntityId(enquiry)) {
+      persistenceTasks.push(this.conversationRepository.attachEnquiry(getEntityId(conversation), getEntityId(enquiry)));
+    }
 
     if (aiTurn.memoryUpdate.shouldUpdate && aiTurn.memoryUpdate.summary) {
-      await this.customerService.updateMemory(customerId, aiTurn.memoryUpdate.summary, aiTurn.memoryUpdate.preferences);
+      persistenceTasks.push(
+        this.customerService.updateMemory(customerId, aiTurn.memoryUpdate.summary, aiTurn.memoryUpdate.preferences)
+      );
     }
 
-    await this.notificationService.enqueue({
-      type: "concierge-reply",
-      channel: "whatsapp",
-      recipient: customer.phone || payload.phone,
-      body: {
-        text: aiTurn.replyText
-      },
-      idempotencyKey: `reply:${payload.messageId}`,
-      tenantId
-    });
-
-    await this.conversationRepository.appendMessage(getEntityId(conversation), {
-      direction: "outbound",
-      role: "assistant",
-      text: aiTurn.replyText,
-      sentAt: new Date()
-    });
+    await Promise.all(persistenceTasks);
 
     if (aiTurn.nextAction === "clarify" || aiTurn.missingFields.length > 0) {
       const tenantConfig = await resolveCurrentTenantConfig();
