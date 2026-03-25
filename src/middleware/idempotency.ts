@@ -3,6 +3,7 @@ import { IdempotencyKeyRepository } from "../modules/integrations/idempotency-ke
 import { AppError } from "../common/errors/AppError";
 import { addMinutes } from "../common/utils/date";
 import { sha256 } from "../common/utils/crypto";
+import { logger } from "../infrastructure/logging/logger";
 
 const repository = new IdempotencyKeyRepository();
 
@@ -45,26 +46,48 @@ const idempotencyMiddlewareHandler = async (request: Request, response: Response
   }
 
   const originalJson = response.json.bind(response);
+  const originalSend = response.send.bind(response);
   let responseCaptured = false;
   let responseBody: Record<string, unknown> | undefined;
+  let finalized = false;
 
-  response.on("finish", () => {
+  const persistOutcome = (operation: Promise<void>): void => {
+    void operation.catch((error) => {
+      logger.warn("Failed to persist idempotency state", {
+        key,
+        route: request.originalUrl,
+        method: request.method,
+        error
+      });
+    });
+  };
+
+  const finalize = (operationFactory: () => Promise<void>): void => {
+    if (finalized) {
+      return;
+    }
+
+    finalized = true;
+    persistOutcome(operationFactory());
+  };
+
+  response.once("finish", () => {
     if (!responseCaptured) {
-      void repository.fail(key, `Request finished without a JSON response (status ${response.statusCode})`);
+      finalize(() => repository.fail(key, `Request finished without a captured response body (status ${response.statusCode})`));
       return;
     }
 
     if (response.statusCode >= 500) {
-      void repository.fail(key, `Request failed with status ${response.statusCode}`);
+      finalize(() => repository.fail(key, `Request failed with status ${response.statusCode}`));
       return;
     }
 
-    void repository.complete(key, response.statusCode, responseBody ?? {});
+    finalize(() => repository.complete(key, response.statusCode, responseBody ?? {}));
   });
 
-  response.on("close", () => {
+  response.once("close", () => {
     if (!response.writableEnded) {
-      void repository.fail(key, "Connection closed before the response completed");
+      finalize(() => repository.fail(key, "Connection closed before the response completed"));
     }
   });
 
@@ -73,6 +96,16 @@ const idempotencyMiddlewareHandler = async (request: Request, response: Response
     responseBody = typeof body === "object" && body !== null ? body as Record<string, unknown> : { value: body };
     return originalJson(body);
   }) as Response["json"];
+
+  response.send = ((body?: unknown) => {
+    responseCaptured = true;
+    responseBody = typeof body === "object" && body !== null
+      ? body as Record<string, unknown>
+      : body === undefined
+        ? {}
+        : { value: body };
+    return originalSend(body);
+  }) as Response["send"];
 
   next();
 };

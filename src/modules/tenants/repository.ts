@@ -10,9 +10,14 @@ type TenantCacheEntry = {
   expiresAt: number;
 };
 
+type TenantSlugCacheEntry = {
+  tenantId: string;
+  expiresAt: number;
+};
+
 const TENANT_CACHE_TTL_MS = 30_000;
 const tenantByIdCache = new Map<string, TenantCacheEntry>();
-const tenantIdBySlugCache = new Map<string, string>();
+const tenantIdBySlugCache = new Map<string, TenantSlugCacheEntry>();
 
 const normalizeSlug = (slug: string): string => slug.toLowerCase();
 
@@ -58,7 +63,10 @@ const rememberTenant = <T extends TenantRecord>(tenant: T): T => {
     tenant,
     expiresAt: Date.now() + TENANT_CACHE_TTL_MS
   });
-  tenantIdBySlugCache.set(normalizeSlug(tenant.slug), tenantId);
+  tenantIdBySlugCache.set(normalizeSlug(tenant.slug), {
+    tenantId,
+    expiresAt: Date.now() + TENANT_CACHE_TTL_MS
+  });
   return tenant;
 };
 
@@ -69,9 +77,9 @@ export const invalidateTenantCache = (payload: { tenantId?: string; tenantSlug?:
 
   if (payload.tenantSlug) {
     const normalizedSlug = normalizeSlug(payload.tenantSlug);
-    const tenantId = tenantIdBySlugCache.get(normalizedSlug);
-    if (tenantId) {
-      removeTenantCacheEntry(tenantId);
+    const tenantCacheEntry = tenantIdBySlugCache.get(normalizedSlug);
+    if (tenantCacheEntry) {
+      removeTenantCacheEntry(tenantCacheEntry.tenantId);
     }
 
     tenantIdBySlugCache.delete(normalizedSlug);
@@ -100,14 +108,18 @@ export class TenantRepository {
 
   async findBySlug(slug: string): Promise<TenantRecord | null> {
     const normalizedSlug = normalizeSlug(slug);
-    const cachedTenantId = tenantIdBySlugCache.get(normalizedSlug);
-    if (cachedTenantId) {
-      const cached = getCachedTenantById(cachedTenantId);
-      if (cached) {
-        return cached;
-      }
+    const cachedTenantEntry = tenantIdBySlugCache.get(normalizedSlug);
+    if (cachedTenantEntry) {
+      if (cachedTenantEntry.expiresAt <= Date.now()) {
+        tenantIdBySlugCache.delete(normalizedSlug);
+      } else {
+        const cached = getCachedTenantById(cachedTenantEntry.tenantId);
+        if (cached) {
+          return cached;
+        }
 
-      tenantIdBySlugCache.delete(normalizedSlug);
+        tenantIdBySlugCache.delete(normalizedSlug);
+      }
     }
 
     const tenant = await TenantModel.findOne({ slug: normalizedSlug }).lean();

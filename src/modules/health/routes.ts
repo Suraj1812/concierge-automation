@@ -1,6 +1,6 @@
 import { Router } from "express";
 import mongoose from "mongoose";
-import { redisConnection } from "../../infrastructure/cache/redis";
+import { isQueueBackendDisabled, redisConnection } from "../../infrastructure/cache/redis";
 import { asyncHandler } from "../../common/utils/async-handler";
 import { metrics } from "../../infrastructure/observability/metrics";
 
@@ -8,7 +8,8 @@ export const healthRoutes = Router();
 
 const resolveHealthSnapshot = () => ({
   mongo: mongoose.connection.readyState === 1 ? "connected" : "disconnected",
-  redis: redisConnection.status,
+  redis: isQueueBackendDisabled() ? "disabled" : redisConnection.status,
+  queueBackend: isQueueBackendDisabled() ? "inline" : "bullmq",
   uptimeSeconds: Math.floor(process.uptime()),
   timestamp: new Date().toISOString()
 });
@@ -30,7 +31,8 @@ healthRoutes.get(
   "/ready",
   asyncHandler(async (_request, response) => {
     const snapshot = resolveHealthSnapshot();
-    const isReady = snapshot.mongo === "connected" && ["ready", "connect", "connecting"].includes(snapshot.redis);
+    const isReady = snapshot.mongo === "connected"
+      && (snapshot.redis === "disabled" || ["ready", "connect", "connecting"].includes(snapshot.redis));
 
     response.status(isReady ? 200 : 503).json({
       success: isReady,

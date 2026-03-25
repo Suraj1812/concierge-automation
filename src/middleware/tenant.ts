@@ -1,5 +1,6 @@
 import { NextFunction, Request, Response } from "express";
 import { AppError } from "../common/errors/AppError";
+import { getEntityId } from "../common/utils/entity";
 import { tenantService } from "../container";
 import { runWithTenantContext } from "../infrastructure/tenancy/tenant-context";
 import { buildResolvedTenantConfig } from "../modules/tenants/runtime-config";
@@ -11,7 +12,7 @@ const attachTenantToRequest = async (request: Request, tenantId?: string, tenant
     : await tenantService.resolveBySlug(tenantSlug);
 
   request.tenant = {
-    id: String((tenant as unknown as { _id?: unknown })._id || (tenant as unknown as { id?: string }).id),
+    id: getEntityId(tenant),
     slug: tenant.slug,
     name: tenant.name,
     status: tenant.status,

@@ -6,6 +6,7 @@ import { AppError } from "../../common/errors/AppError";
 import { AuthRepository } from "./repository";
 import { AdminUser } from "./admin.model";
 import { TenantService } from "../tenants/service";
+import { getEntityId } from "../../common/utils/entity";
 
 export class AuthService {
   constructor(
@@ -19,7 +20,8 @@ export class AuthService {
     tenantSlug?: string
   ): Promise<{ token: string; admin: Pick<AdminUser, "email" | "name" | "role"> & { tenantId: string; tenantSlug: string } }> {
     const tenant = await this.tenantService.resolveBySlug(tenantSlug);
-    const admin = await this.authRepository.findByEmail(email, String((tenant as unknown as { _id?: unknown })._id || (tenant as unknown as { id?: string }).id));
+    const tenantId = getEntityId(tenant);
+    const admin = await this.authRepository.findByEmail(email, tenantId);
 
     if (!admin || !admin.isActive) {
       throw new AppError("Invalid credentials", 401, "INVALID_CREDENTIALS");
@@ -61,7 +63,7 @@ export class AuthService {
 
   async seedDefaultAdmin(): Promise<void> {
     const tenant = await this.tenantService.seedDefaultTenant();
-    const tenantId = String((tenant as unknown as { _id?: unknown })._id || (tenant as unknown as { id?: string }).id);
+    const tenantId = getEntityId(tenant);
     const existing = await this.authRepository.findByEmail(env.ADMIN_EMAIL, tenantId);
 
     if (existing) {

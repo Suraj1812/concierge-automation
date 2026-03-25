@@ -4,7 +4,7 @@ import { attachTenantPayload } from "../../infrastructure/tenancy/attach-tenant-
 
 export class QuoteRepository {
   async create(payload: Quote): Promise<Quote> {
-    const document = await QuoteModel.create(attachTenantPayload(payload as unknown as Record<string, unknown>));
+    const document = await QuoteModel.create(attachTenantPayload(payload));
     return document.toObject();
   }
 

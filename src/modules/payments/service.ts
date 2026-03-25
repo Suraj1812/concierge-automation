@@ -47,15 +47,19 @@ export class PaymentService {
   ) {}
 
   async createOrder(enquiryId: string, proposalId: string) {
-    const proposal = await this.proposalRepository.findById(proposalId);
-    const enquiry = await this.enquiryRepository.findById(enquiryId);
+    const [proposal, enquiry] = await Promise.all([
+      this.proposalRepository.findById(proposalId),
+      this.enquiryRepository.findById(enquiryId)
+    ]);
 
     if (!proposal || !enquiry) {
       throw new AppError("Proposal or enquiry not found", 404, "PAYMENT_CONTEXT_NOT_FOUND");
     }
 
-    const quote = await this.quoteRepository.findById(proposal.recommendedQuoteId.toString());
-    const customer = await this.customerRepository.findById(enquiry.customerId.toString());
+    const [quote, customer] = await Promise.all([
+      this.quoteRepository.findById(proposal.recommendedQuoteId.toString()),
+      this.customerRepository.findById(enquiry.customerId.toString())
+    ]);
     const tenantId = getTenantIdFromEntity(proposal)
       || getTenantIdFromEntity(enquiry)
       || getTenantIdFromEntity(customer)
@@ -270,7 +274,7 @@ export class PaymentService {
       }
 
       const customer = await this.customerRepository.findById(enquiry.customerId.toString());
-      if (!customer) {
+      if (!customer || !customer.phone) {
         await this.paymentRepository.releaseAutomationLock(paymentId);
         return;
       }
@@ -316,7 +320,7 @@ export class PaymentService {
         await this.notificationService.enqueue({
           type: "payment-retry-link",
           channel: "whatsapp",
-          recipient: customer.phone || "",
+          recipient: customer.phone,
           body: {
             text: `I’ve refreshed your secure payment link for convenience. Your new order reference is ${newOrder.id}. Once completed, I’ll confirm everything immediately.`
           },
@@ -343,7 +347,7 @@ export class PaymentService {
         await this.notificationService.enqueue({
           type: "payment-manual-assistance",
           channel: "whatsapp",
-          recipient: customer.phone || "",
+          recipient: customer.phone,
           body: {
             text: "Your payment link has expired a few times, so I recommend a quick manual check-in. Our team can assist immediately to complete the booking smoothly."
           },
@@ -357,7 +361,7 @@ export class PaymentService {
       await this.notificationService.enqueue({
         type: "payment-reminder",
         channel: "whatsapp",
-        recipient: customer.phone || "",
+        recipient: customer.phone,
         body: {
           text: "A quick reminder that your secure payment link is still active. Once completed, I’ll confirm the booking and coordinate the next steps immediately."
         },

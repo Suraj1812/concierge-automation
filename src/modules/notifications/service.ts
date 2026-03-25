@@ -23,12 +23,17 @@ export class NotificationService {
     tenantId?: string;
     delayMs?: number;
   }): Promise<void> {
+    const recipient = payload.recipient.trim();
+    if (!recipient) {
+      throw new AppError("Notification recipient is required", 422, "NOTIFICATION_RECIPIENT_MISSING");
+    }
+
     let notification;
     try {
       notification = await this.notificationRepository.create({
         type: payload.type,
         channel: payload.channel,
-        recipient: payload.recipient,
+        recipient,
         payload: payload.body,
         status: "pending",
         attempts: 0,
@@ -45,15 +50,15 @@ export class NotificationService {
     }
 
     try {
-    await notificationQueue.add(
-      payload.type,
-      {
-        tenantId: payload.tenantId || getCurrentTenantId(),
-        notificationId: getEntityId(notification)
-      },
-      {
-        delay: payload.delayMs,
-        jobId: payload.idempotencyKey
+      await notificationQueue.add(
+        payload.type,
+        {
+          tenantId: payload.tenantId || getCurrentTenantId(),
+          notificationId: getEntityId(notification)
+        },
+        {
+          delay: payload.delayMs,
+          jobId: payload.idempotencyKey
         }
       );
     } catch (error) {
@@ -88,15 +93,17 @@ export class NotificationService {
           );
         } else if (text) {
           await this.whatsAppService.sendTextMessage(notification.recipient, text);
+        } else {
+          throw new AppError("WhatsApp notification payload must include text or link", 422, "INVALID_NOTIFICATION_PAYLOAD");
         }
-      }
-
-      if (notification.channel === "email") {
+      } else if (notification.channel === "email") {
         await this.emailService.sendEmail(
           notification.recipient,
           (notification.payload.subject as string) || notification.type,
           (notification.payload.text as string) || ""
         );
+      } else {
+        throw new AppError(`Unsupported notification channel: ${notification.channel}`, 422, "UNSUPPORTED_NOTIFICATION_CHANNEL");
       }
 
       await this.notificationRepository.markSent(notificationId);

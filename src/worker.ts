@@ -1,30 +1,30 @@
-import { connectDatabase } from "./infrastructure/db/mongoose";
-import { disconnectDatabase } from "./infrastructure/db/mongoose";
 import { logger } from "./infrastructure/logging/logger";
 import { startWorkers } from "./workers";
+import {
+  registerGracefulShutdown,
+  startCoreDependencies,
+  stopCoreDependencies
+} from "./infrastructure/runtime/lifecycle";
 
 const start = async (): Promise<void> => {
-  await connectDatabase();
-  const workers = await startWorkers();
+  let workers: Awaited<ReturnType<typeof startWorkers>> | null = null;
+
+  registerGracefulShutdown("workers", async () => {
+    if (workers) {
+      await workers.close();
+    }
+    await stopCoreDependencies();
+  });
+
+  await startCoreDependencies();
+  workers = await startWorkers();
   logger.info("Background workers started");
-
-  const shutdown = async (signal: string) => {
-    logger.info(`Received ${signal}, shutting down workers`);
-    await workers.close();
-    await disconnectDatabase();
-    process.exit(0);
-  };
-
-  process.once("SIGINT", () => {
-    void shutdown("SIGINT");
-  });
-
-  process.once("SIGTERM", () => {
-    void shutdown("SIGTERM");
-  });
 };
 
-void start().catch((error) => {
+void start().catch(async (error) => {
   logger.error("Failed to start worker", { error });
+  await stopCoreDependencies().catch((shutdownError) => {
+    logger.error("Failed to clean up after worker startup error", { error: shutdownError });
+  });
   process.exit(1);
 });

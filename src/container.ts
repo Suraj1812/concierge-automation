@@ -49,6 +49,10 @@ import { EmailMessageRepository } from "./modules/emails/repository";
 import { EmailAutomationService } from "./modules/emails/service";
 import { EmailAutomationController } from "./modules/emails/controller";
 import { ConnectorController } from "./modules/connectors/controller";
+import { ConnectorService } from "./modules/connectors/service";
+import { conversationQueue, queueNames } from "./infrastructure/queue/queues";
+import { registerQueueProcessor } from "./infrastructure/queue/registry";
+import { logger } from "./infrastructure/logging/logger";
 
 export const tenantRepository = new TenantRepository();
 export const tenantService = new TenantService(tenantRepository);
@@ -114,10 +118,22 @@ export const quoteService = new QuoteService(
 export const quoteController = new QuoteController(quoteService);
 export const vendorResponseService = new VendorResponseService(vendorRepository, quoteService);
 export const vendorResponseController = new VendorResponseController(vendorResponseService, webhookReceiptRepository);
-export const connectorController = new ConnectorController(
+export const connectorService = new ConnectorService(
   emailAutomationService,
   vendorResponseService,
-  webhookReceiptRepository
+  webhookReceiptRepository,
+  async (payload) => {
+    await conversationQueue.add(
+      "whatsapp-inbound",
+      payload,
+      {
+        jobId: `whatsapp:${payload.messageId}`
+      }
+    );
+  }
+);
+export const connectorController = new ConnectorController(
+  connectorService
 );
 
 export const proposalRepository = new ProposalRepository();
@@ -173,3 +189,142 @@ export const conversationService = new ConversationService(
 export const conversationController = new ConversationController(conversationService);
 
 export const whatsAppWebhookController = new WhatsAppWebhookController(whatsAppService, webhookReceiptRepository);
+
+registerQueueProcessor({
+  queueName: queueNames.conversationProcessing,
+  jobName: "whatsapp-inbound",
+  concurrency: 15,
+  handler: async (payload) => {
+    await conversationService.processInboundWhatsApp({
+      phone: String(payload.phone),
+      name: typeof payload.name === "string" ? payload.name : undefined,
+      whatsappUserId: typeof payload.whatsappUserId === "string" ? payload.whatsappUserId : undefined,
+      messageId: String(payload.messageId),
+      text: String(payload.text)
+    });
+  }
+});
+
+registerQueueProcessor({
+  queueName: queueNames.customerFollowUp,
+  jobName: "conversation-clarification-follow-up",
+  concurrency: 10,
+  handler: async (payload) => {
+    await conversationService.processClarificationFollowUp({
+      conversationId: String(payload.conversationId),
+      customerId: String(payload.customerId),
+      enquiryId: String(payload.enquiryId),
+      scheduledFrom: String(payload.scheduledFrom)
+    });
+  }
+});
+
+registerQueueProcessor({
+  queueName: queueNames.customerFollowUp,
+  jobName: "proposal-review-follow-up",
+  concurrency: 10,
+  handler: async (payload) => {
+    await proposalService.processProposalFollowUp(String(payload.proposalId));
+  }
+});
+
+registerQueueProcessor({
+  queueName: queueNames.vendorOutreach,
+  jobName: "vendor-outreach",
+  concurrency: 10,
+  handler: async (payload) => {
+    await vendorCommunicationService.sendVendorRequest(String(payload.vendorRequestId));
+  }
+});
+
+registerQueueProcessor({
+  queueName: queueNames.vendorFollowUp,
+  jobName: "vendor-follow-up",
+  concurrency: 10,
+  handler: async (payload) => {
+    await vendorCommunicationService.followUpVendorRequest(String(payload.vendorRequestId));
+  }
+});
+
+registerQueueProcessor({
+  queueName: queueNames.quoteNormalization,
+  jobName: "quote-normalization",
+  concurrency: 10,
+  handler: async (payload) => {
+    await quoteService.normalizeQuote(String(payload.quoteId));
+  }
+});
+
+registerQueueProcessor({
+  queueName: queueNames.proposalGeneration,
+  jobName: "proposal-generation",
+  concurrency: 5,
+  handler: async (payload) => {
+    await proposalService.generateForEnquiry(String(payload.enquiryId));
+  }
+});
+
+registerQueueProcessor({
+  queueName: queueNames.notifications,
+  jobName: "*",
+  concurrency: 20,
+  handler: async (payload) => {
+    await notificationService.process(String(payload.notificationId));
+  }
+});
+
+registerQueueProcessor({
+  queueName: queueNames.bookingLifecycle,
+  jobName: "payment-captured",
+  concurrency: 10,
+  handler: async (payload) => {
+    await bookingService.createOrUpdateFromPayment(String(payload.paymentId));
+  }
+});
+
+registerQueueProcessor({
+  queueName: queueNames.bookingLifecycle,
+  jobName: "service-reminder",
+  concurrency: 10,
+  handler: async (payload) => {
+    await bookingService.processServiceReminder(String(payload.bookingId));
+  }
+});
+
+registerQueueProcessor({
+  queueName: queueNames.bookingLifecycle,
+  jobName: "day-of-service-checkin",
+  concurrency: 10,
+  handler: async (payload) => {
+    await bookingService.processDayOfServiceCheckIn(String(payload.bookingId));
+  }
+});
+
+registerQueueProcessor({
+  queueName: queueNames.bookingLifecycle,
+  jobName: "post-service-follow-up",
+  concurrency: 10,
+  handler: async (payload) => {
+    await bookingService.processPostServiceFollowUp(String(payload.bookingId));
+  }
+});
+
+registerQueueProcessor({
+  queueName: queueNames.payments,
+  jobName: "payment-reminder",
+  concurrency: 10,
+  handler: async (payload) => {
+    await paymentService.processReminder(String(payload.paymentId));
+  }
+});
+
+registerQueueProcessor({
+  queueName: queueNames.deadLetter,
+  jobName: "dead-letter",
+  concurrency: 1,
+  handler: async (payload) => {
+    logger.error("Dead-letter queue event captured", {
+      payload
+    });
+  }
+});

@@ -1,4 +1,5 @@
 import { Enquiry } from "../enquiries/enquiry.model";
+import { getEntityId } from "../../common/utils/entity";
 import { Vendor } from "../vendors/vendor.model";
 import { Quote, QuoteScoreBreakdown } from "./quote.model";
 
@@ -37,9 +38,13 @@ export class DecisionEngineService {
 
   rankQuotes(enquiry: Enquiry, quotes: Quote[], vendors: Vendor[]): Array<Quote & { scoreBreakdown: QuoteScoreBreakdown }> {
     const normalizedQuotes = quotes.filter((quote) => quote.normalizedOffer?.totalAmount);
+    if (normalizedQuotes.length === 0) {
+      return [];
+    }
+
     const vendorById = new Map(
       vendors.map((vendor) => [
-        String((vendor as unknown as { _id?: unknown; id?: string })._id || (vendor as unknown as { id?: string }).id),
+        getEntityId(vendor),
         vendor
       ])
     );

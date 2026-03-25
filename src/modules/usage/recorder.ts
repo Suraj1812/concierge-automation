@@ -12,7 +12,7 @@ export const recordUsageEvent = async (
     return;
   }
 
-  void UsageEventModel.create({
+  await UsageEventModel.create({
     tenantId,
     metric,
     quantity,

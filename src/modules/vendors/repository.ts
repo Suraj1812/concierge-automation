@@ -21,7 +21,7 @@ export class VendorRepository {
   }
 
   async create(payload: Vendor): Promise<Vendor> {
-    const document = await VendorModel.create(attachTenantPayload(payload as unknown as Record<string, unknown>));
+    const document = await VendorModel.create(attachTenantPayload(payload));
     return document.toObject();
   }
 

@@ -3,6 +3,7 @@ export const withTimeout = async <T>(promise: Promise<T>, timeoutMs: number, err
 
   const timeoutPromise = new Promise<T>((_, reject) => {
     timeoutId = setTimeout(() => reject(errorFactory()), timeoutMs);
+    timeoutId.unref?.();
   });
 
   try {

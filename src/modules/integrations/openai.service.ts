@@ -6,6 +6,7 @@ import { safeJsonParse } from "../../common/utils/json";
 import { AppError } from "../../common/errors/AppError";
 import { CircuitBreaker } from "../../infrastructure/resilience/circuit-breaker";
 import { withTimeout } from "../../common/utils/timeout";
+import { retryAsync } from "../../common/utils/retry";
 import { resolveCurrentTenantConfig } from "../tenants/runtime-config";
 import { recordUsageEvent } from "../usage/recorder";
 
@@ -72,28 +73,73 @@ export class OpenAIService {
     this.client = new OpenAI({ apiKey: env.OPENAI_API_KEY });
   }
 
+  private shouldRetry(error: unknown): boolean {
+    if (error instanceof AppError && error.code === "AI_TIMEOUT") {
+      return true;
+    }
+
+    const status = typeof error === "object" && error !== null && "status" in error
+      ? Number(error.status)
+      : undefined;
+
+    return status === 429 || (status !== undefined && status >= 500);
+  }
+
+  private normalizeError(error: unknown): AppError {
+    if (error instanceof AppError) {
+      return error;
+    }
+
+    if (error instanceof Error && error.message === "Circuit breaker is open") {
+      return new AppError("AI provider is temporarily unavailable", 503, "AI_PROVIDER_UNAVAILABLE");
+    }
+
+    const status = typeof error === "object" && error !== null && "status" in error
+      ? Number(error.status)
+      : 502;
+
+    return new AppError("AI request failed", status, "AI_REQUEST_FAILED", {
+      cause: error instanceof Error ? error.message : String(error)
+    });
+  }
+
   private async createJsonCompletion(systemPrompt: string, userPrompt: string): Promise<Record<string, unknown>> {
-    const completion = await this.circuitBreaker.execute(async () =>
-      withTimeout(
-        this.client.chat.completions.create({
-          model: env.OPENAI_MODEL,
-          temperature: 0.2,
-          response_format: { type: "json_object" },
-          messages: [
-            {
-              role: "system",
-              content: systemPrompt
-            },
-            {
-              role: "user",
-              content: userPrompt
-            }
-          ]
-        }),
-        20_000,
-        () => new AppError("OpenAI request timed out", 504, "AI_TIMEOUT")
-      )
-    );
+    let completion;
+
+    try {
+      completion = await this.circuitBreaker.execute(async () =>
+        retryAsync(
+          async () =>
+            withTimeout(
+              this.client.chat.completions.create({
+                model: env.OPENAI_MODEL,
+                temperature: 0.2,
+                response_format: { type: "json_object" },
+                messages: [
+                  {
+                    role: "system",
+                    content: systemPrompt
+                  },
+                  {
+                    role: "user",
+                    content: userPrompt
+                  }
+                ]
+              }),
+              20_000,
+              () => new AppError("OpenAI request timed out", 504, "AI_TIMEOUT")
+            ),
+          {
+            attempts: 3,
+            initialDelayMs: 400,
+            maxDelayMs: 2_000,
+            shouldRetry: (error) => this.shouldRetry(error)
+          }
+        )
+      );
+    } catch (error) {
+      throw this.normalizeError(error);
+    }
 
     const content = completion.choices[0]?.message?.content;
 

@@ -1,4 +1,5 @@
 import { env } from "../../config/env";
+import { getEntityId } from "../../common/utils/entity";
 import { getTenantContext } from "../../infrastructure/tenancy/tenant-context";
 import { TenantRepository, type TenantRecord } from "./repository";
 import type { TenantConfig, TenantFeatureFlags } from "./tenant.model";
@@ -16,8 +17,7 @@ const getTenantId = (tenant: TenantRecord | null | undefined): string | undefine
     return undefined;
   }
 
-  const rawId = tenant._id ?? tenant.id;
-  return rawId ? String(rawId) : undefined;
+  return getEntityId(tenant);
 };
 
 const buildDefaultTenantConfig = (): ResolvedTenantConfig => ({

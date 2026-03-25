@@ -5,19 +5,20 @@ AI Concierge System is a multi-tenant backend for running concierge operations a
 Important notes:
 
 - Backend only. There is no customer UI or admin frontend in this repository.
-- The API server and the worker are separate processes.
-- MongoDB stores business state. Redis powers BullMQ queues.
+- The default production shape is API plus worker as separate processes.
+- MongoDB stores business state. Redis powers BullMQ queues when queue mode is enabled.
+- The system can also run fully standalone with `DISABLE_QUEUE_BACKEND=true`.
 - The repo does not use `tsx`. Development and production both run compiled JavaScript.
 
 ## What the system does end to end
 
 1. A customer sends a message on WhatsApp or an inbound email webhook hits the API.
-2. The API verifies the webhook signature, resolves the tenant, deduplicates the event, and enqueues work.
-3. The worker upserts the customer, loads the active conversation and enquiry, and calls OpenAI for structured extraction.
+2. The API verifies the webhook signature, resolves the tenant, deduplicates the event, and either enqueues work or runs it inline.
+3. The worker or inline processor upserts the customer, loads the active conversation and enquiry, and calls OpenAI for structured extraction.
 4. If details are missing, the system sends a clarification reply and schedules a follow-up reminder.
 5. If the request is complete, the system matches vendors, creates vendor requests, and dispatches outreach over WhatsApp or email.
 6. Vendor replies enter through the vendor webhook, are mapped back to the open vendor request, and become quotes.
-7. The worker normalizes raw quotes with OpenAI and ranks them with the decision engine.
+7. The worker or inline processor normalizes raw quotes with OpenAI and ranks them with the decision engine.
 8. When vendor collection is complete or follow-ups time out, the system generates a proposal PDF, stores it under `storage/proposals`, and sends a share link plus proposal message to the customer.
 9. An admin creates a Razorpay order for the proposal.
 10. When Razorpay sends a `payment.captured` webhook, the system creates or updates the booking, notifies the customer and vendor, and schedules reminder/check-in/follow-up jobs.
@@ -30,10 +31,10 @@ flowchart LR
   Customer["Customer"] --> Channels["WhatsApp / Email"]
   Channels --> API["Express API"]
   API --> Mongo["MongoDB"]
-  API --> Redis["Redis / BullMQ"]
+  API --> Redis["Redis / BullMQ (optional)"]
   API --> Webhooks["Webhook verification + dedupe"]
-  Webhooks --> Queues["Background queues"]
-  Queues --> Worker["Worker process"]
+  Webhooks --> Queues["Queues / Inline execution"]
+  Queues --> Worker["Worker process (optional)"]
   Worker --> AI["OpenAI"]
   Worker --> Vendors["Vendor outreach"]
   Worker --> PDF["PDF generator"]
@@ -49,8 +50,10 @@ flowchart LR
 - Route registry: `src/routes.ts`
 - Dependency wiring: `src/container.ts`
 - Environment validation: `src/config/env.ts`
+- Startup and shutdown lifecycle: `src/infrastructure/runtime/*`
 - Tenant context and runtime config: `src/infrastructure/tenancy/*`, `src/modules/tenants/*`
 - Queue definitions: `src/infrastructure/queue/queues.ts`
+- Queue registry and inline execution: `src/infrastructure/queue/registry.ts`
 - Worker handlers: `src/workers/index.ts`
 - WhatsApp intake and delivery: `src/modules/integrations/whatsapp.*`
 - Email intake and delivery: `src/modules/emails/*`, `src/modules/integrations/email.service.ts`
@@ -82,7 +85,7 @@ flowchart LR
 - Node.js `>=20.11.0`
 - npm
 - MongoDB
-- Redis
+- Redis for BullMQ mode
 - Docker Desktop if you want MongoDB and Redis locally via `docker compose`
 - Real provider credentials if you want live WhatsApp, OpenAI, Razorpay, or SMTP behavior
 
@@ -121,7 +124,31 @@ Run the worker dev loop in a second terminal:
 npm run dev:worker
 ```
 
-### Option C: Run the whole stack in Docker Compose
+### Option C: Run fully standalone without Redis or a worker
+
+Use this when you want the backend to orchestrate itself without n8n and without a separate worker process.
+
+1. Set `DISABLE_QUEUE_BACKEND=true` in `.env`
+2. Start only MongoDB
+3. Run only the API process
+
+```bash
+cp .env.example .env
+npm install
+open -a Docker
+docker compose up -d mongo
+npm run build
+npm start
+```
+
+In this mode:
+
+- Redis is not required
+- `npm run start:worker` is not required
+- queue jobs execute inline in the API process
+- connector endpoints still work
+
+### Option D: Run the whole stack in Docker Compose
 
 ```bash
 cp .env.example .env
@@ -136,6 +163,11 @@ docker compose up -d --build api worker mongo redis
 - Live check: `http://localhost:4000/api/health/live`
 - Ready check: `http://localhost:4000/api/health/ready`
 - Metrics: `http://localhost:4000/api/health/metrics`
+
+Health semantics:
+
+- In BullMQ mode, readiness requires both MongoDB and Redis.
+- In standalone inline mode, readiness requires MongoDB and reports Redis as `disabled`.
 
 ## Bootstrap behavior
 
@@ -177,6 +209,7 @@ The example `.env.example` is bootable for local development. It lets the app st
 | `REDIS_HOST` | Redis host | Required |
 | `REDIS_PORT` | Redis port | Default `6379` |
 | `REDIS_PASSWORD` | Redis password | Optional |
+| `DISABLE_QUEUE_BACKEND` | Disable BullMQ and run jobs inline in the API process | Default `false`; useful for standalone mode |
 | `PDF_STORAGE_PATH` | Proposal PDF directory | Default `storage/proposals` |
 
 ### AI
@@ -249,7 +282,6 @@ The example `.env.example` is bootable for local development. It lets the app st
 | --- | --- | --- |
 | `TEST_WHATSAPP_RECIPIENT` | Seed helper default phone number | Used by `npm run seed:test-whatsapp` |
 | `TEST_WHATSAPP_NAME` | Seed helper default name | Optional |
-| `DISABLE_QUEUE_BACKEND` | Inline queue mode for tests | Optional, mainly used by integration tests |
 
 ## NPM scripts
 
@@ -310,9 +342,9 @@ Write endpoints that currently require `Idempotency-Key`:
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| `GET` | `/api/health` | Snapshot of Mongo and Redis status and uptime |
+| `GET` | `/api/health` | Snapshot of Mongo, Redis, queue mode, and uptime |
 | `GET` | `/api/health/live` | Liveness probe |
-| `GET` | `/api/health/ready` | Readiness probe; returns `503` if Mongo or Redis is not ready |
+| `GET` | `/api/health/ready` | Readiness probe; returns `503` if Mongo is not ready, or if BullMQ mode is enabled and Redis is not ready |
 | `GET` | `/api/health/metrics` | Prometheus-style metrics |
 | `GET` | `/api/webhooks/whatsapp` | Meta webhook verification for the default tenant |
 | `GET` | `/api/webhooks/:tenantSlug/whatsapp` | Meta webhook verification for a specific tenant |
@@ -500,7 +532,8 @@ Payload shape:
 Notes:
 
 - `messageId` is optional but strongly recommended so retries from n8n stay idempotent.
-- This endpoint queues work. The worker must be running.
+- In BullMQ mode, this endpoint queues work and the worker must be running.
+- In standalone mode (`DISABLE_QUEUE_BACKEND=true`), the API process executes the queued work inline.
 
 #### 3. Send an inbound email payload
 
@@ -582,7 +615,8 @@ Important:
 
 - Do not send `x-hub-signature-256` to the connector route.
 - Do not use `/api/webhooks/whatsapp` from n8n unless you are forwarding the exact Meta payload with a valid Meta signature.
-- If you queue WhatsApp inbound messages, run both the API and the worker.
+- In BullMQ mode, run both the API and the worker.
+- In standalone mode, run only the API.
 
 ## End-to-end flows
 
@@ -733,7 +767,7 @@ This project is already structured as a multi-tenant backend.
 
 - Admin routes use `tenantId` from the JWT.
 - Public webhooks use `:tenantSlug`, `x-tenant-slug`, or the default tenant.
-- Queue jobs carry `tenantId` so workers can restore the correct context.
+- Queue jobs carry `tenantId` so workers or inline processors can restore the correct context.
 - Runtime config is resolved per tenant and cached in the tenant context.
 
 ### What is tenant configurable
@@ -758,7 +792,27 @@ This project is already structured as a multi-tenant backend.
 
 ## Queue and worker model
 
-The API is intentionally short-lived on webhook and admin requests. Long-running work happens in BullMQ workers.
+The codebase supports two queue execution modes.
+
+### Mode 1: BullMQ mode
+
+This is the default and the intended production shape for scale.
+
+- Redis is required
+- the API enqueues jobs
+- the worker consumes jobs
+- API and worker can scale independently
+
+### Mode 2: Inline mode
+
+Enable this with `DISABLE_QUEUE_BACKEND=true`.
+
+- Redis is not required
+- there is no separate worker
+- jobs execute in-process inside the API runtime
+- local demos, low-volume single-process deployments, and simple automation setups can run end to end without n8n or a worker
+
+The API is intentionally short-lived in BullMQ mode. In inline mode, the same orchestration runs inside the API process.
 
 | Queue | Main job names | Purpose | Worker concurrency |
 | --- | --- | --- | --- |
@@ -777,7 +831,9 @@ Notes:
 
 - Jobs retry with exponential backoff.
 - When a worker exhausts retries, the job metadata is copied into the dead-letter queue.
-- If `DISABLE_QUEUE_BACKEND=true`, queues operate in an inline stub mode. That is mainly for tests, not for normal runtime.
+- In inline mode, `jobId` is still used to deduplicate scheduled work where applicable.
+- Inline timers are cleared during shutdown so delayed jobs do not outlive the process.
+- Inline mode is valid for standalone operation, but BullMQ mode is still the better choice for scale and isolation.
 
 ## Data model
 
@@ -813,6 +869,11 @@ Main persisted collections:
 - Centralized JSON error responses with correlation ids.
 - Request logging plus in-process metrics export.
 - Circuit breaker and timeout wrappers around OpenAI, WhatsApp, and Razorpay interactions.
+- Transient retry handling around OpenAI, WhatsApp, Razorpay, and SMTP send operations.
+- Process-level shutdown guards for `unhandledRejection` and `uncaughtException`.
+- Safer idempotency persistence so replay metadata is recorded without introducing new unhandled promise paths.
+- Queue cleanup on shutdown for inline delayed jobs.
+- Cached tenant config and cached SMTP transport reuse with TTL-based eviction.
 - Background retries plus dead-letter capture when job attempts are exhausted.
 
 ## Automated verification
@@ -921,11 +982,28 @@ Your `.env` is missing required values or contains an invalid value. The most co
 
 ### API starts but nothing happens after inbound traffic
 
-The worker is probably not running. Start it with:
+You are probably in BullMQ mode without a worker process. Start it with:
 
 ```bash
 npm run start:worker
 ```
+
+If you want the app to run everything in one process, set:
+
+```bash
+DISABLE_QUEUE_BACKEND=true
+```
+
+and restart only the API.
+
+### Readiness says degraded because Redis is down
+
+That is expected in BullMQ mode.
+
+You have two choices:
+
+1. Start Redis and the worker normally.
+2. Set `DISABLE_QUEUE_BACKEND=true` if you want standalone single-process operation.
 
 ### WhatsApp still does not reach your phone
 

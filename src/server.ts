@@ -1,47 +1,37 @@
-import type { Server } from "node:http";
 import { app } from "./app";
-import { connectDatabase } from "./infrastructure/db/mongoose";
 import { env } from "./config/env";
 import { logger } from "./infrastructure/logging/logger";
 import { seedAdminUser } from "./modules/auth/admin-seed";
-import { disconnectDatabase } from "./infrastructure/db/mongoose";
+import {
+  closeHttpServer,
+  registerGracefulShutdown,
+  startCoreDependencies,
+  stopCoreDependencies
+} from "./infrastructure/runtime/lifecycle";
+import type { Server } from "node:http";
 
 const start = async (): Promise<void> => {
-  await connectDatabase();
+  let server: Server | null = null;
+
+  registerGracefulShutdown("API server", async () => {
+    if (server) {
+      await closeHttpServer(server);
+    }
+    await stopCoreDependencies();
+  });
+
+  await startCoreDependencies();
   await seedAdminUser();
 
-  const server = app.listen(env.APP_PORT, () => {
+  server = app.listen(env.APP_PORT, () => {
     logger.info(`API server listening on port ${env.APP_PORT}`);
-  });
-
-  const shutdown = async (signal: string, activeServer: Server) => {
-    logger.info(`Received ${signal}, shutting down API server`);
-
-    await new Promise<void>((resolve, reject) => {
-      activeServer.close((error) => {
-        if (error) {
-          reject(error);
-          return;
-        }
-
-        resolve();
-      });
-    });
-
-    await disconnectDatabase();
-    process.exit(0);
-  };
-
-  process.once("SIGINT", () => {
-    void shutdown("SIGINT", server);
-  });
-
-  process.once("SIGTERM", () => {
-    void shutdown("SIGTERM", server);
   });
 };
 
-void start().catch((error) => {
+void start().catch(async (error) => {
   logger.error("Failed to start server", { error });
+  await stopCoreDependencies().catch((shutdownError) => {
+    logger.error("Failed to clean up after server startup error", { error: shutdownError });
+  });
   process.exit(1);
 });

@@ -5,7 +5,7 @@ import { attachTenantPayload } from "../../infrastructure/tenancy/attach-tenant-
 
 export class EnquiryRepository {
   async create(payload: Enquiry): Promise<Enquiry> {
-    const document = await EnquiryModel.create(attachTenantPayload(payload as unknown as Record<string, unknown>));
+    const document = await EnquiryModel.create(attachTenantPayload(payload));
     return document.toObject();
   }
 

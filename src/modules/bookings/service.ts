@@ -42,8 +42,10 @@ export class BookingService {
       throw new AppError("Payment not found", 404, "PAYMENT_NOT_FOUND");
     }
 
-    const enquiry = await this.enquiryRepository.findById(payment.enquiryId.toString());
-    const proposal = payment.proposalId ? await this.proposalRepository.findById(payment.proposalId.toString()) : null;
+    const [enquiry, proposal] = await Promise.all([
+      this.enquiryRepository.findById(payment.enquiryId.toString()),
+      payment.proposalId ? this.proposalRepository.findById(payment.proposalId.toString()) : Promise.resolve(null)
+    ]);
     const customer = enquiry ? await this.customerRepository.findById(enquiry.customerId.toString()) : null;
 
     if (!payment || !enquiry || !proposal || !customer) {
@@ -58,11 +60,10 @@ export class BookingService {
     const existingBooking = await this.bookingRepository.findByEnquiry(getEntityId(enquiry));
 
     if (existingBooking) {
-      await this.bookingRepository.update(getEntityId(existingBooking), {
+      return this.bookingRepository.update(getEntityId(existingBooking), {
         paymentId: new Types.ObjectId(paymentId),
         status: "confirmed"
       });
-      return existingBooking;
     }
 
     const quote = await this.quoteRepository.findById(proposal.recommendedQuoteId.toString());
@@ -90,39 +91,47 @@ export class BookingService {
       status: "booked"
     });
 
-    if (customer.phone) {
-      await this.notificationService.enqueue({
-        type: "booking-confirmed",
-        channel: "whatsapp",
-        recipient: customer.phone,
-        body: {
-          text: `Your booking is confirmed. Reference: ${(booking as unknown as { confirmationReference?: string }).confirmationReference}. Our concierge team will now coordinate the final arrangements.`
-        },
-        idempotencyKey: `booking-confirmed:${getEntityId(booking)}`,
-        tenantId
-      });
-    }
-
     const vendor = await this.vendorRepository.findById(quote.vendorId.toString());
     const vendorContact = vendor?.contactPoints.find((contact) => contact.channel === "whatsapp")
       || vendor?.contactPoints.find((contact) => contact.channel === "email")
       || vendor?.contactPoints[0];
 
-    if (vendorContact) {
-      await this.notificationService.enqueue({
-        type: "vendor-booking-confirmed",
-        channel: vendorContact.channel,
-        recipient: vendorContact.value,
-        body: {
-          subject: `Confirmed booking: ${enquiry.title}`,
-          text: `The booking is now confirmed.\nReference: ${(booking as unknown as { confirmationReference?: string }).confirmationReference}\nService: ${enquiry.title}\nWindow: ${(booking as unknown as { serviceWindow?: string }).serviceWindow || "TBD"}`
-        },
-        idempotencyKey: `vendor-booking-confirmed:${getEntityId(booking)}`,
-        tenantId
-      });
+    const postBookingTasks: Array<Promise<unknown>> = [
+      this.scheduleLifecycleJobs(getEntityId(booking), enquiry.requirements.startDate, enquiry.requirements.endDate, tenantId)
+    ];
+
+    if (customer.phone) {
+      postBookingTasks.push(
+        this.notificationService.enqueue({
+          type: "booking-confirmed",
+          channel: "whatsapp",
+          recipient: customer.phone,
+          body: {
+            text: `Your booking is confirmed. Reference: ${booking.confirmationReference}. Our concierge team will now coordinate the final arrangements.`
+          },
+          idempotencyKey: `booking-confirmed:${getEntityId(booking)}`,
+          tenantId
+        })
+      );
     }
 
-    await this.scheduleLifecycleJobs(getEntityId(booking), enquiry.requirements.startDate, enquiry.requirements.endDate, tenantId);
+    if (vendorContact) {
+      postBookingTasks.push(
+        this.notificationService.enqueue({
+          type: "vendor-booking-confirmed",
+          channel: vendorContact.channel,
+          recipient: vendorContact.value,
+          body: {
+            subject: `Confirmed booking: ${enquiry.title}`,
+            text: `The booking is now confirmed.\nReference: ${booking.confirmationReference || "TBD"}\nService: ${enquiry.title}\nWindow: ${booking.serviceWindow || "TBD"}`
+          },
+          idempotencyKey: `vendor-booking-confirmed:${getEntityId(booking)}`,
+          tenantId
+        })
+      );
+    }
+
+    await Promise.all(postBookingTasks);
 
     return booking;
   }

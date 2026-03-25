@@ -3,7 +3,7 @@ import { attachTenantPayload } from "../../infrastructure/tenancy/attach-tenant-
 
 export class AuditRepository {
   async create(payload: AuditLog): Promise<AuditLog> {
-    const document = await AuditLogModel.create(attachTenantPayload(payload as unknown as Record<string, unknown>));
+    const document = await AuditLogModel.create(attachTenantPayload(payload));
     return document.toObject();
   }
 

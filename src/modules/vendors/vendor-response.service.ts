@@ -36,12 +36,14 @@ export class VendorResponseService {
       throw new AppError("Unable to map vendor reply to an active request", 422, "VENDOR_REPLY_NOT_MAPPED");
     }
 
-    return this.quoteService.create({
+    const quote: Quote = {
       enquiryId: new Types.ObjectId(vendorRequest.enquiryId.toString()),
       vendorId: new Types.ObjectId(vendorRequest.vendorId.toString()),
       rawPayload: payload.rawPayload,
       status: "received",
       expiresAt: payload.expiresAt ? new Date(payload.expiresAt) : undefined
-    } as Quote);
+    };
+
+    return this.quoteService.create(quote);
   }
 }

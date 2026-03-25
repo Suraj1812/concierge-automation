@@ -4,7 +4,7 @@ import { attachTenantPayload } from "../../infrastructure/tenancy/attach-tenant-
 
 export class PaymentRepository {
   async create(payload: Payment): Promise<Payment> {
-    const document = await PaymentModel.create(attachTenantPayload(payload as unknown as Record<string, unknown>));
+    const document = await PaymentModel.create(attachTenantPayload(payload));
     return document.toObject();
   }
 

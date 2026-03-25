@@ -3,6 +3,7 @@ import { runWithTenantContext } from "../infrastructure/tenancy/tenant-context";
 import { buildResolvedTenantConfig } from "../modules/tenants/runtime-config";
 import { customerService, tenantService } from "../container";
 import { logger } from "../infrastructure/logging/logger";
+import { getEntityId } from "../common/utils/entity";
 
 const normalizePhone = (value: string): string => {
   const trimmed = value.trim();
@@ -29,7 +30,7 @@ const main = async (): Promise<void> => {
 
   try {
     const tenant = await tenantService.seedDefaultTenant();
-    const tenantId = String((tenant as unknown as { _id?: unknown })._id || (tenant as unknown as { id?: string }).id);
+    const tenantId = getEntityId(tenant);
 
     const customer = await runWithTenantContext(
       {
@@ -45,7 +46,7 @@ const main = async (): Promise<void> => {
     );
 
     logger.info("Seeded WhatsApp test customer", {
-      customerId: String((customer as unknown as { _id?: unknown })._id || (customer as unknown as { id?: string }).id),
+      customerId: getEntityId(customer),
       phone,
       name: customer.name,
       tenantId

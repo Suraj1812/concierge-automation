@@ -25,6 +25,7 @@ const waitFor = async <T>(factory: () => Promise<T>, predicate: (value: T) => bo
 
 const main = async (): Promise<void> => {
   const mongoBinaryDir = "/tmp/mongodb-memory-server-binaries";
+  const mongoPort = 37117 + (process.pid % 1000);
   process.env.MONGOMS_DOWNLOAD_DIR = mongoBinaryDir;
   const mongo = new MongoMemoryServer({
     binary: {
@@ -32,7 +33,7 @@ const main = async (): Promise<void> => {
     },
     instance: {
       ip: "127.0.0.1",
-      port: 27117
+      port: mongoPort
     }
   });
   await mongo.start(true);

@@ -1,18 +1,9 @@
 import { Job, Worker } from "bullmq";
-import { bullMqConnection } from "../infrastructure/cache/redis";
+import { bullMqConnection, isQueueBackendDisabled } from "../infrastructure/cache/redis";
 import { deadLetterQueue, queueNames } from "../infrastructure/queue/queues";
+import { executeRegisteredQueueJob, listRegisteredQueues, type QueueJobPayload } from "../infrastructure/queue/registry";
 import { logger } from "../infrastructure/logging/logger";
 import { metrics } from "../infrastructure/observability/metrics";
-import { runWithTenantContext } from "../infrastructure/tenancy/tenant-context";
-import {
-  bookingService,
-  conversationService,
-  notificationService,
-  paymentService,
-  proposalService,
-  quoteService,
-  vendorCommunicationService
-} from "../container";
 
 type WorkerRegistry = {
   close: () => Promise<void>;
@@ -60,7 +51,14 @@ const registerWorker = (worker: Worker): Worker => {
         {
           jobId: `dlq:${worker.name}:${job.id}`
         }
-      );
+      ).catch((deadLetterError) => {
+        logger.error("Failed to enqueue dead-letter job", {
+          queue: worker.name,
+          jobId: job.id,
+          jobName: job.name,
+          error: deadLetterError
+        });
+      });
     }
   });
 
@@ -68,130 +66,34 @@ const registerWorker = (worker: Worker): Worker => {
 };
 
 export const startWorkers = async (): Promise<WorkerRegistry> => {
-  const executeWithTenantScope = async <T>(job: Job, operation: () => Promise<T>): Promise<T> => {
-    const tenantId = job.data.tenantId as string | undefined;
-    if (!tenantId) {
-      return operation();
-    }
+  if (isQueueBackendDisabled()) {
+    logger.warn("Queue backend is disabled. Worker startup skipped.");
 
-    return runWithTenantContext(
-      {
-        tenantId
-      },
-      operation
-    );
-  };
+    return {
+      close: async () => {}
+    };
+  }
 
-  const workers = [
+  const workers = listRegisteredQueues().map(({ queueName, concurrency }) =>
     registerWorker(new Worker(
-      queueNames.conversationProcessing,
-      async (job) => {
-        await executeWithTenantScope(job, async () => conversationService.processInboundWhatsApp(job.data));
+      queueName,
+      async (job: Job<QueueJobPayload>) => {
+        await executeRegisteredQueueJob(queueName, job.name, job.data);
       },
-      { connection: bullMqConnection, concurrency: 15 }
-    )),
-
-    registerWorker(new Worker(
-      queueNames.customerFollowUp,
-      async (job) => {
-        await executeWithTenantScope(job, async () => {
-          if (job.name === "conversation-clarification-follow-up") {
-            await conversationService.processClarificationFollowUp(job.data as {
-              conversationId: string;
-              customerId: string;
-              enquiryId: string;
-              scheduledFrom: string;
-            });
-          }
-
-          if (job.name === "proposal-review-follow-up") {
-            await proposalService.processProposalFollowUp(job.data.proposalId as string);
-          }
-        });
-      },
-      { connection: bullMqConnection, concurrency: 10 }
-    )),
-
-    registerWorker(new Worker(
-      queueNames.vendorOutreach,
-      async (job) => {
-        await executeWithTenantScope(job, async () => vendorCommunicationService.sendVendorRequest(job.data.vendorRequestId as string));
-      },
-      { connection: bullMqConnection, concurrency: 10 }
-    )),
-
-    registerWorker(new Worker(
-      queueNames.vendorFollowUp,
-      async (job) => {
-        await executeWithTenantScope(job, async () => vendorCommunicationService.followUpVendorRequest(job.data.vendorRequestId as string));
-      },
-      { connection: bullMqConnection, concurrency: 10 }
-    )),
-
-    registerWorker(new Worker(
-      queueNames.quoteNormalization,
-      async (job) => {
-        await executeWithTenantScope(job, async () => quoteService.normalizeQuote(job.data.quoteId as string));
-      },
-      { connection: bullMqConnection, concurrency: 10 }
-    )),
-
-    registerWorker(new Worker(
-      queueNames.proposalGeneration,
-      async (job) => {
-        await executeWithTenantScope(job, async () => proposalService.generateForEnquiry(job.data.enquiryId as string));
-      },
-      { connection: bullMqConnection, concurrency: 5 }
-    )),
-
-    registerWorker(new Worker(
-      queueNames.notifications,
-      async (job) => {
-        await executeWithTenantScope(job, async () => notificationService.process(job.data.notificationId as string));
-      },
-      { connection: bullMqConnection, concurrency: 20 }
-    )),
-
-    registerWorker(new Worker(
-      queueNames.bookingLifecycle,
-      async (job) => {
-        await executeWithTenantScope(job, async () => {
-          if (job.name === "payment-captured") {
-            await bookingService.createOrUpdateFromPayment(job.data.paymentId as string);
-          }
-
-          if (job.name === "service-reminder") {
-            await bookingService.processServiceReminder(job.data.bookingId as string);
-          }
-
-          if (job.name === "day-of-service-checkin") {
-            await bookingService.processDayOfServiceCheckIn(job.data.bookingId as string);
-          }
-
-          if (job.name === "post-service-follow-up") {
-            await bookingService.processPostServiceFollowUp(job.data.bookingId as string);
-          }
-        });
-      },
-      { connection: bullMqConnection, concurrency: 10 }
-    )),
-
-    registerWorker(new Worker(
-      queueNames.payments,
-      async (job) => {
-        await executeWithTenantScope(job, async () => {
-          if (job.name === "payment-reminder") {
-            await paymentService.processReminder(job.data.paymentId as string);
-          }
-        });
-      },
-      { connection: bullMqConnection, concurrency: 10 }
+      { connection: bullMqConnection, concurrency }
     ))
-  ];
+  );
 
   return {
     close: async () => {
-      await Promise.all(workers.map(async (worker) => worker.close()));
+      const results = await Promise.allSettled(workers.map(async (worker) => worker.close()));
+      const failures = results.flatMap((result) => (
+        result.status === "rejected" ? [result.reason instanceof Error ? result.reason.message : String(result.reason)] : []
+      ));
+
+      if (failures.length > 0) {
+        throw new Error(`Failed to close workers: ${failures.join("; ")}`);
+      }
     }
   };
 };

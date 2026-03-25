@@ -18,6 +18,7 @@ const waitFor = async <T>(factory: () => Promise<T>, predicate: (value: T) => bo
 
 const main = async (): Promise<void> => {
   const mongoBinaryDir = "/tmp/mongodb-memory-server-binaries";
+  const mongoPort = 39119 + (process.pid % 1000);
   process.env.MONGOMS_DOWNLOAD_DIR = mongoBinaryDir;
   const mongo = new MongoMemoryServer({
     binary: {
@@ -25,7 +26,7 @@ const main = async (): Promise<void> => {
     },
     instance: {
       ip: "127.0.0.1",
-      port: 27119
+      port: mongoPort
     }
   });
   await mongo.start(true);
@@ -75,6 +76,7 @@ const main = async (): Promise<void> => {
 
   const [
     { app },
+    { getEntityId },
     { connectDatabase, disconnectDatabase },
     { seedAdminUser },
     { runWithTenantContext },
@@ -87,6 +89,7 @@ const main = async (): Promise<void> => {
     { redisConnection }
   ] = await Promise.all([
     import("../src/app"),
+    import("../src/common/utils/entity"),
     import("../src/infrastructure/db/mongoose"),
     import("../src/modules/auth/admin-seed"),
     import("../src/infrastructure/tenancy/tenant-context"),
@@ -121,10 +124,14 @@ const main = async (): Promise<void> => {
     return {} as never;
   };
 
+  (queues.notificationQueue as unknown as { add: typeof queues.notificationQueue.add }).add = async () => ({} as never);
+  (queues.quoteNormalizationQueue as unknown as { add: typeof queues.quoteNormalizationQueue.add }).add = async () => ({} as never);
+  (queues.proposalGenerationQueue as unknown as { add: typeof queues.proposalGenerationQueue.add }).add = async () => ({} as never);
+
   await connectDatabase();
   await seedAdminUser();
   const tenant = await container.tenantService.resolveBySlug("default");
-  const tenantId = String((tenant as unknown as { _id?: unknown; id?: string })._id || (tenant as unknown as { id?: string }).id);
+  const tenantId = getEntityId(tenant);
 
   const server = await new Promise<http.Server>((resolve) => {
     const instance = app.listen(0, "127.0.0.1", () => resolve(instance));
@@ -251,7 +258,7 @@ const main = async (): Promise<void> => {
 
         const vendorRequest = await container.vendorRepository.createOrUpdateVendorRequest({
           enquiryId: String(enquiry!._id),
-          vendorId: String((vendor as unknown as { _id?: unknown; id?: string })._id || (vendor as unknown as { id?: string }).id),
+          vendorId: getEntityId(vendor),
           communicationChannel: "email"
         });
 

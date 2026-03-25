@@ -3,7 +3,7 @@ import { attachTenantPayload } from "../../infrastructure/tenancy/attach-tenant-
 
 export class BookingRepository {
   async create(payload: Booking): Promise<Booking> {
-    const document = await BookingModel.create(attachTenantPayload(payload as unknown as Record<string, unknown>));
+    const document = await BookingModel.create(attachTenantPayload(payload));
     return document.toObject();
   }
 
