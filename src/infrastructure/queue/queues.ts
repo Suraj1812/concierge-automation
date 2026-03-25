@@ -28,7 +28,7 @@ type QueueLike = {
   add: (name: string, data: unknown, options?: Record<string, unknown>) => Promise<unknown>;
 };
 
-const createQueue = (name: string): Queue | QueueLike => {
+const createQueue = (name: string): QueueLike => {
   if (process.env.DISABLE_QUEUE_BACKEND === "true") {
     return {
       add: async (_jobName: string, _data: unknown, _options?: Record<string, unknown>) => ({
@@ -37,10 +37,22 @@ const createQueue = (name: string): Queue | QueueLike => {
     };
   }
 
-  return new Queue(name, {
-    connection: bullMqConnection,
-    defaultJobOptions
-  });
+  let queue: Queue | null = null;
+
+  const getQueue = (): Queue => {
+    if (!queue) {
+      queue = new Queue(name, {
+        connection: bullMqConnection,
+        defaultJobOptions
+      });
+    }
+
+    return queue;
+  };
+
+  return {
+    add: (jobName: string, data: unknown, options?: Record<string, unknown>) => getQueue().add(jobName, data, options)
+  };
 };
 
 export const conversationQueue = createQueue(queueNames.conversationProcessing);
