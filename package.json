@@ -10,6 +10,7 @@
     "build": "tsc -p tsconfig.json",
     "start": "node dist/src/server.js",
     "start:worker": "node dist/src/worker.js",
+    "seed:test-whatsapp": "npm run build && node dist/src/scripts/seed-test-whatsapp.js",
     "lint": "tsc --noEmit -p tsconfig.json",
     "test:smoke": "npm run build && node dist/tests/e2e-smoke.js",
     "test:hardening": "npm run build && node dist/tests/hardening.integration.js"

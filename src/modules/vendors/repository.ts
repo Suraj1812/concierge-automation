@@ -49,6 +49,7 @@ export class VendorRepository {
     communicationChannel: VendorRequest["communicationChannel"];
     responseDueAt?: Date;
   }): Promise<VendorRequest> {
+    const vendorRequestId = new Types.ObjectId();
     const document = await VendorRequestModel.findOneAndUpdate(
       {
         enquiryId: new Types.ObjectId(payload.enquiryId),
@@ -60,17 +61,14 @@ export class VendorRepository {
           responseDueAt: payload.responseDueAt
         },
         $setOnInsert: {
+          _id: vendorRequestId,
           status: "queued",
-          attemptCount: 0
+          attemptCount: 0,
+          vendorReference: `VR-${vendorRequestId.toString().slice(-8).toUpperCase()}`
         }
       },
       { new: true, upsert: true }
     );
-
-    if (!document.vendorReference) {
-      document.vendorReference = `VR-${document.id.slice(-8).toUpperCase()}`;
-      await document.save();
-    }
 
     return document.toObject();
   }

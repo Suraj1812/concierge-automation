@@ -40,7 +40,17 @@ const vendorRequestSchema = new Schema<VendorRequest>(
 );
 
 vendorRequestSchema.index({ enquiryId: 1, vendorId: 1 }, { unique: true });
-vendorRequestSchema.index({ tenantId: 1, vendorReference: 1 }, { unique: true, sparse: true });
+vendorRequestSchema.index(
+  { tenantId: 1, vendorReference: 1 },
+  {
+    unique: true,
+    partialFilterExpression: {
+      vendorReference: {
+        $type: "string"
+      }
+    }
+  }
+);
 vendorRequestSchema.plugin(tenantScopedPlugin);
 
 export const VendorRequestModel = model<VendorRequest>("VendorRequest", vendorRequestSchema);
