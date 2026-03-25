@@ -2,7 +2,7 @@ import { HydratedDocument, Schema, model } from "mongoose";
 import { tenantScopedPlugin } from "../../infrastructure/tenancy/tenant-scoped.plugin";
 
 export interface WebhookReceipt {
-  provider: "whatsapp" | "razorpay" | "vendor";
+  provider: "whatsapp" | "razorpay" | "vendor" | "email";
   externalEventId: string;
   signature?: string;
   status: "processing" | "completed" | "failed";
@@ -15,7 +15,7 @@ export interface WebhookReceipt {
 
 const webhookReceiptSchema = new Schema<WebhookReceipt>(
   {
-    provider: { type: String, enum: ["whatsapp", "razorpay", "vendor"], required: true },
+    provider: { type: String, enum: ["whatsapp", "razorpay", "vendor", "email"], required: true },
     externalEventId: { type: String, required: true },
     signature: { type: String },
     status: { type: String, enum: ["processing", "completed", "failed"], required: true, default: "processing", index: true },

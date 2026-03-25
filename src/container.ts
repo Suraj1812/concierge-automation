@@ -48,6 +48,7 @@ import { WhatsAppWebhookController } from "./modules/integrations/whatsapp.contr
 import { EmailMessageRepository } from "./modules/emails/repository";
 import { EmailAutomationService } from "./modules/emails/service";
 import { EmailAutomationController } from "./modules/emails/controller";
+import { ConnectorController } from "./modules/connectors/controller";
 
 export const tenantRepository = new TenantRepository();
 export const tenantService = new TenantService(tenantRepository);
@@ -113,6 +114,11 @@ export const quoteService = new QuoteService(
 export const quoteController = new QuoteController(quoteService);
 export const vendorResponseService = new VendorResponseService(vendorRepository, quoteService);
 export const vendorResponseController = new VendorResponseController(vendorResponseService, webhookReceiptRepository);
+export const connectorController = new ConnectorController(
+  emailAutomationService,
+  vendorResponseService,
+  webhookReceiptRepository
+);
 
 export const proposalRepository = new ProposalRepository();
 export const proposalService = new ProposalService(

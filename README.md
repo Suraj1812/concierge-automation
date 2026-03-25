@@ -162,6 +162,7 @@ The example `.env.example` is bootable for local development. It lets the app st
 | `APP_BASE_URL` | Public base URL | Used to build proposal share links |
 | `DEFAULT_TENANT_SLUG` | Fallback tenant slug | Default `default` |
 | `DEFAULT_TENANT_NAME` | Fallback tenant name | Default `Default Tenant` |
+| `AUTOMATION_API_KEY` | Shared secret for connector endpoints | Use this from n8n, Make, Zapier, or custom apps |
 | `JWT_SECRET` | JWT signing secret | Must be strong in production |
 | `JWT_EXPIRES_IN` | Token lifetime | Default `8h` |
 | `ADMIN_EMAIL` | Seeded admin email | Required |
@@ -261,6 +262,7 @@ The example `.env.example` is bootable for local development. It lets the app st
 | `npm run start:worker` | Starts the compiled worker |
 | `npm run seed:test-whatsapp` | Builds the project and seeds one WhatsApp customer into the default tenant |
 | `npm run lint` | Type-checks without emitting |
+| `npm run test:connectors` | Runs connector endpoint integration coverage |
 | `npm run test:smoke` | Runs the smoke integration flow |
 | `npm run test:hardening` | Runs duplicate-handling and proposal-link hardening flow |
 
@@ -271,6 +273,7 @@ The example `.env.example` is bootable for local development. It lets the app st
 - Validation and application errors return `{ "success": false, "code": "...", "message": "...", "correlationId": "..." }`.
 - Every request gets an `x-correlation-id` response header.
 - Authenticated routes require `Authorization: Bearer <token>`.
+- Connector routes accept either `Authorization: Bearer <AUTOMATION_API_KEY>` or `x-automation-key: <AUTOMATION_API_KEY>`.
 - Mutating admin routes use `Idempotency-Key` and reject missing or conflicting re-use.
 - Public webhooks can resolve tenancy from `:tenantSlug`, the `x-tenant-slug` header, or the default tenant.
 
@@ -322,6 +325,21 @@ Write endpoints that currently require `Idempotency-Key`:
 | `POST` | `/api/payments/webhook` | Razorpay webhook for the default tenant |
 | `POST` | `/api/payments/webhook/:tenantSlug` | Razorpay webhook for a specific tenant |
 | `GET` | `/api/proposals/shared/:proposalId/document?token=...` | Public proposal PDF access with a signed token |
+
+### Connector endpoints
+
+These are the automation-friendly routes for n8n, Make, Zapier, custom CRMs, forms, chat frontends, or other systems that cannot produce Meta/Razorpay signature headers.
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/connectors/health` | Connector auth and tenant sanity check for the default tenant |
+| `GET` | `/api/connectors/:tenantSlug/health` | Connector auth and tenant sanity check for a specific tenant |
+| `POST` | `/api/connectors/whatsapp/inbound` | Queue an inbound WhatsApp-style customer message for the default tenant |
+| `POST` | `/api/connectors/:tenantSlug/whatsapp/inbound` | Queue an inbound WhatsApp-style customer message for a specific tenant |
+| `POST` | `/api/connectors/email/inbound` | Process an inbound email payload for the default tenant |
+| `POST` | `/api/connectors/:tenantSlug/email/inbound` | Process an inbound email payload for a specific tenant |
+| `POST` | `/api/connectors/vendor-responses/inbound` | Ingest a vendor response payload for the default tenant |
+| `POST` | `/api/connectors/:tenantSlug/vendor-responses/inbound` | Ingest a vendor response payload for a specific tenant |
 
 ### Admin endpoints
 
@@ -423,6 +441,149 @@ curl -X POST http://localhost:4000/api/payments/orders \
 
 The payment order response returns `paymentId`, `orderId`, `amount`, `currency`, and `keyId`. This repo does not include a checkout UI, so you need your own client or a simulated webhook to complete the Razorpay flow.
 
+## Connector API for n8n and other tools
+
+Use the connector API when your external tool cannot send Meta, email-provider, vendor, or Razorpay webhook signatures. These routes are authenticated with `AUTOMATION_API_KEY` instead of HMAC signatures and are safe for retried automation runs because they are deduplicated by event id where applicable.
+
+### Auth header
+
+Use one of these:
+
+- `Authorization: Bearer YOUR_AUTOMATION_API_KEY`
+- `x-automation-key: YOUR_AUTOMATION_API_KEY`
+
+### Tenant selection
+
+Choose one of these patterns:
+
+- Default tenant:
+  - `/api/connectors/...`
+- Specific tenant:
+  - `/api/connectors/YOUR_TENANT_SLUG/...`
+- Or use the `x-tenant-slug` header with the non-slug path
+
+### n8n-ready examples
+
+#### 1. Health check
+
+```bash
+curl http://localhost:4000/api/connectors/health \
+  -H "Authorization: Bearer dev-automation-key-change-me"
+```
+
+#### 2. Queue a WhatsApp-style message
+
+```bash
+curl -X POST http://localhost:4000/api/connectors/whatsapp/inbound \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer dev-automation-key-change-me" \
+  -d '{
+    "phone": "+919625553534",
+    "name": "Suraj",
+    "message": "I need a villa in Dubai",
+    "messageId": "n8n-msg-001"
+  }'
+```
+
+Payload shape:
+
+```json
+{
+  "phone": "+919625553534",
+  "name": "Suraj",
+  "message": "I need a villa in Dubai",
+  "whatsappUserId": "optional-external-user-id",
+  "messageId": "optional-stable-event-id"
+}
+```
+
+Notes:
+
+- `messageId` is optional but strongly recommended so retries from n8n stay idempotent.
+- This endpoint queues work. The worker must be running.
+
+#### 3. Send an inbound email payload
+
+```bash
+curl -X POST http://localhost:4000/api/connectors/email/inbound \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer dev-automation-key-change-me" \
+  -d '{
+    "from": "client@example.com",
+    "subject": "Need a Dubai villa",
+    "text": "We need a premium Dubai villa for 6 guests.",
+    "providerMessageId": "n8n-email-001"
+  }'
+```
+
+Payload shape:
+
+```json
+{
+  "from": "client@example.com",
+  "to": "optional-recipient@example.com",
+  "subject": "Need a Dubai villa",
+  "text": "We need a premium Dubai villa for 6 guests.",
+  "providerMessageId": "optional-stable-event-id"
+}
+```
+
+Notes:
+
+- If `to` is omitted, the tenant email `fromAddress` or `SMTP_FROM` is used.
+- `providerMessageId` is optional but recommended for retry-safe dedupe.
+
+#### 4. Send a vendor response
+
+```bash
+curl -X POST http://localhost:4000/api/connectors/vendor-responses/inbound \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer dev-automation-key-change-me" \
+  -d '{
+    "externalEventId": "n8n-vendor-001",
+    "vendorReference": "VR-ABCDEFGH",
+    "rawPayload": "Reference: VR-ABCDEFGH\nWe can offer a premium villa for INR 38,50,000."
+  }'
+```
+
+Payload shape:
+
+```json
+{
+  "externalEventId": "optional-stable-event-id",
+  "vendorReference": "optional-vendor-reference",
+  "vendorId": "optional-vendor-id",
+  "enquiryId": "optional-enquiry-id",
+  "rawPayload": "Reference: VR-ABCDEFGH\nWe can offer a premium villa for INR 38,50,000.",
+  "expiresAt": "optional-iso-datetime"
+}
+```
+
+Notes:
+
+- Include `vendorReference` when possible. It is the most reliable way to map the reply.
+- If `externalEventId` is omitted, the system hashes the full payload for dedupe.
+
+### n8n HTTP Request node settings
+
+For n8n, use:
+
+- Method: `POST`
+- Authentication: `None`
+- Header 1: `Authorization` = `Bearer YOUR_AUTOMATION_API_KEY`
+- Header 2: `Content-Type` = `application/json`
+- URL:
+  - `http://localhost:4000/api/connectors/whatsapp/inbound`
+  - or `http://localhost:4000/api/connectors/YOUR_TENANT_SLUG/whatsapp/inbound`
+- Send Body: `true`
+- Body Content Type: `JSON`
+
+Important:
+
+- Do not send `x-hub-signature-256` to the connector route.
+- Do not use `/api/webhooks/whatsapp` from n8n unless you are forwarding the exact Meta payload with a valid Meta signature.
+- If you queue WhatsApp inbound messages, run both the API and the worker.
+
 ## End-to-end flows
 
 ### WhatsApp flow
@@ -506,6 +667,8 @@ The payment order response returns `paymentId`, `orderId`, `amount`, `currency`,
 ## Real WhatsApp testing
 
 Seeding a number and running the server is not enough by itself. Real WhatsApp testing requires Meta configuration.
+
+If you are testing through n8n or another automation tool instead of Meta, use the connector route above, not `/api/webhooks/whatsapp`.
 
 ### Seed a local customer record
 
@@ -658,9 +821,21 @@ The fastest way to prove the internal orchestration works is the built-in test s
 
 ```bash
 npm run lint
+npm run test:connectors
 npm run test:smoke
 npm run test:hardening
 ```
+
+### What the connector test covers
+
+`tests/connectors.integration.ts` verifies:
+
+- connector auth
+- connector health route
+- WhatsApp connector enqueue flow
+- email connector ingestion flow
+- vendor-response connector ingestion flow
+- duplicate handling for all three connector entry paths
 
 ### What the smoke test covers
 

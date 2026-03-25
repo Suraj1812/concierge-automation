@@ -15,6 +15,7 @@ const emptyStringToUndefined = (value: unknown): unknown => {
 const isProduction = process.env.NODE_ENV === "production";
 const defaultJwtSecret = "dev-only-jwt-secret-change-before-production-123456789";
 const defaultOpenAiKey = "dev-openai-key";
+const defaultAutomationApiKey = "dev-automation-key-change-me";
 
 const envSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
@@ -23,6 +24,12 @@ const envSchema = z.object({
   APP_BASE_URL: z.string().url().default("http://localhost:4000"),
   DEFAULT_TENANT_SLUG: z.string().min(2).default("default"),
   DEFAULT_TENANT_NAME: z.string().min(2).default("Default Tenant"),
+  AUTOMATION_API_KEY: z.preprocess(
+    emptyStringToUndefined,
+    isProduction
+      ? z.string().min(24)
+      : z.string().min(12).default(defaultAutomationApiKey)
+  ),
   JWT_SECRET: z.preprocess(
     emptyStringToUndefined,
     isProduction

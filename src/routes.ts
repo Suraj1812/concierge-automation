@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { requireAdminAuth } from "./middleware/auth";
+import { requireAutomationAuth } from "./middleware/automation-auth";
 import { attachAdminTenantContext, attachPublicTenantContext } from "./middleware/tenant";
 import { healthRoutes } from "./modules/health/routes";
 import { authRoutes } from "./modules/auth/routes";
@@ -19,11 +20,14 @@ import { tenantRoutes } from "./modules/tenants/routes";
 import { dashboardRoutes } from "./modules/dashboard/routes";
 import { emailRoutes } from "./modules/emails/routes";
 import { emailWebhookRoutes } from "./modules/emails/webhook.routes";
+import { connectorRoutes } from "./modules/connectors/routes";
 
 export const router = Router();
 
 router.use("/health", healthRoutes);
 router.use("/auth", authRoutes);
+router.use("/connectors", requireAutomationAuth, attachPublicTenantContext, connectorRoutes);
+router.use("/connectors/:tenantSlug", requireAutomationAuth, attachPublicTenantContext, connectorRoutes);
 router.use("/webhooks/:tenantSlug/whatsapp", attachPublicTenantContext, whatsappRoutes);
 router.use("/webhooks/whatsapp", attachPublicTenantContext, whatsappRoutes);
 router.use("/webhooks/:tenantSlug/vendor-responses", attachPublicTenantContext, vendorResponseRoutes);
