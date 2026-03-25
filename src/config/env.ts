@@ -13,6 +13,35 @@ const emptyStringToUndefined = (value: unknown): unknown => {
 };
 
 const isProduction = process.env.NODE_ENV === "production";
+const parseUrl = (value?: string): URL | null => {
+  if (!value) {
+    return null;
+  }
+
+  try {
+    return new URL(value);
+  } catch {
+    return null;
+  }
+};
+
+const inferredMongoUrl = process.env.MONGODB_URI
+  ?? process.env.MONGO_URL
+  ?? process.env.DATABASE_URL;
+const inferredRedisUrl = process.env.REDIS_URL;
+const parsedRedisUrl = parseUrl(inferredRedisUrl);
+const inferredAppPort = process.env.APP_PORT ?? process.env.PORT;
+const inferredAppBaseUrl = process.env.APP_BASE_URL
+  ?? (process.env.RAILWAY_PUBLIC_DOMAIN ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}` : undefined);
+const inferredRedisHost = process.env.REDIS_HOST
+  ?? process.env.REDISHOST
+  ?? parsedRedisUrl?.hostname;
+const inferredRedisPort = process.env.REDIS_PORT
+  ?? process.env.REDISPORT
+  ?? (parsedRedisUrl?.port ? Number(parsedRedisUrl.port) : undefined);
+const inferredRedisPassword = process.env.REDIS_PASSWORD
+  ?? process.env.REDISPASSWORD
+  ?? (parsedRedisUrl?.password ? decodeURIComponent(parsedRedisUrl.password) : undefined);
 const defaultJwtSecret = "dev-only-jwt-secret-change-before-production-123456789";
 const defaultOpenAiKey = "dev-openai-key";
 const defaultAutomationApiKey = "dev-automation-key-change-me";
@@ -103,7 +132,15 @@ const envSchema = z.object({
   LOG_LEVEL: z.string().default("info")
 });
 
-const parsed = envSchema.safeParse(process.env);
+const parsed = envSchema.safeParse({
+  ...process.env,
+  MONGODB_URI: inferredMongoUrl,
+  REDIS_HOST: inferredRedisHost,
+  REDIS_PORT: inferredRedisPort,
+  REDIS_PASSWORD: inferredRedisPassword,
+  APP_PORT: inferredAppPort,
+  APP_BASE_URL: inferredAppBaseUrl
+});
 
 if (!parsed.success) {
   const issues = parsed.error.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`).join(", ");

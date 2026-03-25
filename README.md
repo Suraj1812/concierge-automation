@@ -189,9 +189,9 @@ The example `.env.example` is bootable for local development. It lets the app st
 | Variable | Purpose | Notes |
 | --- | --- | --- |
 | `NODE_ENV` | Runtime mode | `development`, `test`, or `production` |
-| `APP_PORT` | HTTP port | Defaults to `4000` |
+| `APP_PORT` | HTTP port | Defaults to `4000`; falls back to Railway `PORT` when present |
 | `APP_NAME` | App display name | Used in logs |
-| `APP_BASE_URL` | Public base URL | Used to build proposal share links |
+| `APP_BASE_URL` | Public base URL | Used to build proposal share links; falls back to `https://RAILWAY_PUBLIC_DOMAIN` when available |
 | `DEFAULT_TENANT_SLUG` | Fallback tenant slug | Default `default` |
 | `DEFAULT_TENANT_NAME` | Fallback tenant name | Default `Default Tenant` |
 | `AUTOMATION_API_KEY` | Shared secret for connector endpoints | Use this from n8n, Make, Zapier, or custom apps |
@@ -206,7 +206,7 @@ The example `.env.example` is bootable for local development. It lets the app st
 | Variable | Purpose | Notes |
 | --- | --- | --- |
 | `MONGODB_URI` | MongoDB connection string | Required |
-| `REDIS_HOST` | Redis host | Required |
+| `REDIS_HOST` | Redis host | Required unless you provide `REDIS_URL` |
 | `REDIS_PORT` | Redis port | Default `6379` |
 | `REDIS_PASSWORD` | Redis password | Optional |
 | `DISABLE_QUEUE_BACKEND` | Disable BullMQ and run jobs inline in the API process | Default `false`; useful for standalone mode |
@@ -937,8 +937,33 @@ Important:
 
 The `Dockerfile` compiles the app in a build stage and runs compiled JavaScript in the runtime stage.
 
-- API command: `node dist/src/server.js`
-- Worker command: `node dist/src/worker.js`
+- API command: `APP_PROCESS=server`
+- Worker command: `APP_PROCESS=worker`
+
+### Railway
+
+Railway can deploy this repo directly from the root `Dockerfile`.
+
+Recommended production shape:
+
+- Create one Railway service for the API with public networking enabled and `APP_PROCESS=server`
+- Create a second Railway service for the worker with `APP_PROCESS=worker`
+- Attach both services to the same MongoDB and Redis
+
+Single-service fallback:
+
+- Set `DISABLE_QUEUE_BACKEND=true`
+- Deploy only the API service
+- Skip the separate worker and Redis if you accept inline processing
+
+Railway notes:
+
+- Railway injects `PORT`; the app now uses it automatically if `APP_PORT` is not set
+- If the API service has a Railway public domain, the app can derive `APP_BASE_URL` from `RAILWAY_PUBLIC_DOMAIN`
+- The app can also derive `MONGODB_URI` from `MONGO_URL` or `DATABASE_URL`, and Redis settings from `REDIS_URL`
+- Proposal PDFs are still written to local disk under `storage/proposals`, so treat Railway storage as ephemeral unless you add a volume or move files to object storage later
+- Use `/api/health/ready` for the API health check
+- Use `/api/webhooks/whatsapp` as the Meta callback path once the API service has a public HTTPS domain
 
 ### Docker Compose services
 
